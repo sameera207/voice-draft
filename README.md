@@ -64,32 +64,74 @@ stateDiagram-v2
 ## Install
 
 ```sh
-git clone https://github.com/sameera207/voice-draft.git
-cd voice-draft
-./install.sh
+brew install sameera207/tap/voice-draft
+voice-draft setup
 ```
 
-The installer is idempotent, so you can re-run it safely. It does not use
-`sudo`. It does the following:
+`voice-draft setup` is idempotent, so you can re-run it safely. It does not
+use `sudo`. It does the following:
 
 1. Checks for Apple Silicon and Homebrew.
-2. Installs `sox`, `whisper-cpp`, Hammerspoon and Ollama. Anything already
-   installed is left alone.
+2. Installs Hammerspoon and Ollama if they're missing. Homebrew already
+   installed `sox` and `whisper-cpp` as dependencies.
 3. Downloads the Whisper model (about 1.6 GB) to
    `~/.local/share/voice-draft/models/` and verifies its SHA-256.
 4. Starts Ollama and pulls `qwen2.5:3b`.
-5. Symlinks `hammerspoon/dictation` to `~/.hammerspoon/dictation`.
+5. Links the code into `~/.hammerspoon/dictation`.
 6. Appends `require("dictation")` to `~/.hammerspoon/init.lua` if that line
    isn't there. Nothing else in the file is changed.
 7. Runs the doctor.
 
-Installer options are set with environment variables:
+Setup options are set with environment variables:
 
 | Variable | Effect |
 | --- | --- |
-| `OLLAMA_MODEL=llama3.2:3b` | Pull a different cleanup model. You also need to set it in overrides. |
-| `WHISPER_MODEL=ggml-large-v3-turbo-q5_0.bin` | Download a quantized Whisper model instead (about 0.6 GB). You also need to set `paths.model`. |
+| `OLLAMA_MODEL=llama3.2:3b` | Pull a different cleanup model, then choose it in the menu. |
+| `WHISPER_MODEL=ggml-large-v3-turbo-q5_0.bin` | Download a quantized Whisper model instead (about 0.6 GB). |
 | `SKIP_WHISPER_MODEL=1` | Skip the Whisper download. |
+
+### Install from source
+
+For development, clone the repo instead. Hammerspoon then runs the code
+straight from your checkout:
+
+```sh
+git clone https://github.com/sameera207/voice-draft.git
+cd voice-draft
+./install.sh        # same as: bin/voice-draft setup
+```
+
+### Updates
+
+```sh
+voice-draft update            # upgrade now
+voice-draft autoupdate on     # opt in to a daily check
+voice-draft autoupdate off
+voice-draft autoupdate status
+```
+
+`update` runs `brew upgrade voice-draft`, or `git pull` for a source
+install. It then reloads Hammerspoon. If a dictation is in progress, the
+reload waits until it finishes.
+
+Automatic updates are off unless you turn them on. `autoupdate on`
+installs a macOS LaunchAgent that runs `voice-draft update` once a day at
+10:00, or on the next wake. Its log is
+`~/Library/Logs/voice-draft-update.log`. Update checks run outside
+Hammerspoon, so the dictation tool itself still only talks to Ollama on
+localhost.
+
+### Command reference
+
+| Command | What it does |
+| --- | --- |
+| `voice-draft setup` | Install dependencies, download the model, link into Hammerspoon. |
+| `voice-draft doctor` | Check dependencies and permissions. |
+| `voice-draft update [--quiet]` | Upgrade and reload. |
+| `voice-draft autoupdate on\|off\|status` | Manage daily automatic updates. |
+| `voice-draft config` | Open settings. |
+| `voice-draft uninstall [--purge]` | Unlink from Hammerspoon. `--purge` also deletes the model and settings. |
+| `voice-draft version` | Print the installed version. |
 
 ### Grant permissions
 
@@ -306,9 +348,10 @@ Start with `dictation.doctor()` in the Hammerspoon console.
 ## Uninstall
 
 ```sh
-rm ~/.hammerspoon/dictation
+voice-draft uninstall        # asks whether to delete the model and settings
+brew uninstall voice-draft
 ```
 
-Then delete the `require("dictation")` line from `~/.hammerspoon/init.lua`.
-To reclaim disk space, also run `rm -r ~/.local/share/voice-draft` and
-`ollama rm qwen2.5:3b`.
+This removes the Hammerspoon link, the `require("dictation")` line and the
+auto-update job. It keeps a backup of `~/.hammerspoon/init.lua`. Ollama
+models are left alone; remove them with `ollama rm qwen2.5:3b`.

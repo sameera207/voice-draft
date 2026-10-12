@@ -30,9 +30,9 @@ end
 -- Join whisper-cli stdout lines and drop artifacts. Returns "" for silence.
 function M.clean_output(stdout)
   local lines = {}
-  for line in (stdout or ""):gmatch("[^\n]+") do
+  for raw_line in (stdout or ""):gmatch("[^\n]+") do
     -- Drop any timestamp prefix in case -nt is ignored.
-    line = line:gsub("^%s*%[[%d:%.%s%->]+%]%s*", "")
+    local line = raw_line:gsub("^%s*%[[%d:%.%s%->]+%]%s*", "")
     line = cleanup.trim(line)
     if line ~= "" then lines[#lines + 1] = line end
   end

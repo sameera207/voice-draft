@@ -1,0 +1,527 @@
+#!/usr/bin/env bash
+# voice-draft command-line tool. Never uses sudo.
+#
+#   voice-draft setup              install dependencies, model, Hammerspoon link
+#   voice-draft doctor             check dependencies and permissions
+#   voice-draft update [--quiet]   upgrade to the latest release and reload
+#   voice-draft autoupdate on|off|status
+#   voice-draft config             open settings
+#   voice-draft uninstall [--purge]
+#   voice-draft version [--verbose]
+
+set -euo pipefail
+
+SELF="$(realpath "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo unknown)"
+
+TAP_FORMULA="sameera207/tap/voice-draft"
+DATA_DIR="$HOME/.local/share/voice-draft"
+MODEL_DIR="$DATA_DIR/models"
+CONFIG_DIR="$HOME/.config/voice-draft"
+OVERRIDES="$CONFIG_DIR/overrides.lua"
+HS_DIR="$HOME/.hammerspoon"
+HS_INIT="$HS_DIR/init.lua"
+HS_LINK="$HS_DIR/dictation"
+OLLAMA_URL="http://localhost:11434"
+AGENT_LABEL="com.sameera207.voice-draft.autoupdate"
+AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
+UPDATE_LOG="$HOME/Library/Logs/voice-draft-update.log"
+
+QUIET=0
+step() { [[ $QUIET -eq 1 ]] || printf '\n==> %s\n' "$*"; }
+ok()   { [[ $QUIET -eq 1 ]] || printf '    ok: %s\n' "$*"; }
+info() { [[ $QUIET -eq 1 ]] || printf '%s\n' "$*"; }
+warn() { printf '    warning: %s\n' "$*" >&2; }
+die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
+
+find_brew() {
+  local b
+  b="$(command -v brew || true)"
+  [[ -z "$b" && -x /opt/homebrew/bin/brew ]] && b=/opt/homebrew/bin/brew
+  printf '%s' "$b"
+}
+BREW="$(find_brew)"
+
+find_hs() {
+  local h
+  h="$(command -v hs || true)"
+  [[ -z "$h" && -x /opt/homebrew/bin/hs ]] && h=/opt/homebrew/bin/hs
+  printf '%s' "$h"
+}
+
+# "brew" when running from a Homebrew keg, "git" from a clone, else "other".
+install_kind() {
+  if [[ -n "$BREW" && "$ROOT" == "$("$BREW" --prefix)/Cellar/"* ]]; then
+    echo brew
+  elif [[ -d "$ROOT/.git" ]]; then
+    echo git
+  else
+    echo other
+  fi
+}
+
+# Path Hammerspoon should load the Lua code from. For Homebrew installs this
+# is the version-independent opt/ path, so upgrades need no relinking.
+code_dir() {
+  if [[ "$(install_kind)" == brew ]]; then
+    echo "$("$BREW" --prefix)/opt/voice-draft/libexec/hammerspoon/dictation"
+  else
+    echo "$ROOT/hammerspoon/dictation"
+  fi
+}
+
+# Stable path to this command, for the LaunchAgent.
+cli_path() {
+  if [[ "$(install_kind)" == brew ]]; then
+    echo "$("$BREW" --prefix)/bin/voice-draft"
+  else
+    echo "$ROOT/bin/voice-draft"
+  fi
+}
+
+hammerspoon_running() { pgrep -xq Hammerspoon; }
+
+# Run Lua in Hammerspoon via the hs CLI with a hard timeout. The hs CLI can
+# block indefinitely (e.g. Hammerspoon not set up), and its -t flag does not
+# bound that.
+hs_run() {
+  local code="$1" timeout="${2:-15}" hs_cli
+  hs_cli="$(find_hs)"
+  [[ -n "$hs_cli" ]] && hammerspoon_running || return 1
+  "$hs_cli" -c "$code" 2>/dev/null &
+  local pid=$!
+  ( sleep "$timeout"; kill "$pid" 2>/dev/null ) &
+  local killer=$!
+  local rc=0
+  wait "$pid" || rc=$?
+  kill "$killer" 2>/dev/null || true
+  wait "$killer" 2>/dev/null || true
+  return $rc
+}
+
+ollama_bin() { command -v ollama || echo /Applications/Ollama.app/Contents/Resources/ollama; }
+ollama_up() { curl -s --max-time 2 "$OLLAMA_URL/api/tags" >/dev/null 2>&1; }
+ollama_has() {
+  "$(ollama_bin)" list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx -e "$1" -e "$1:latest"
+}
+
+###########################################################################
+# setup
+###########################################################################
+
+cmd_setup() {
+  local whisper_model="${WHISPER_MODEL:-ggml-large-v3-turbo.bin}"
+  local whisper_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$whisper_model"
+  local whisper_api="https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main"
+  local ollama_model="${OLLAMA_MODEL:-qwen2.5:3b}"
+
+  [[ $EUID -ne 0 ]] || die "do not run as root"
+
+  step "Checking platform"
+  [[ "$(uname -s)" == "Darwin" ]] || die "macOS only"
+  [[ "$(uname -m)" == "arm64" ]] || die "Apple Silicon (arm64) only"
+  ok "macOS $(sw_vers -productVersion) on $(sysctl -n machdep.cpu.brand_string)"
+  [[ -n "$BREW" ]] || die "Homebrew not found. Install it from https://brew.sh and re-run."
+  ok "Homebrew at $BREW"
+  ok "voice-draft $VERSION ($(install_kind) install at $ROOT)"
+
+  step "Installing command-line tools"
+  local formula
+  for formula in sox whisper-cpp; do
+    if "$BREW" list --formula "$formula" >/dev/null 2>&1; then
+      ok "$formula already installed"
+    else
+      "$BREW" install "$formula"
+    fi
+  done
+
+  step "Installing Hammerspoon"
+  if [[ -d /Applications/Hammerspoon.app || -d "$HOME/Applications/Hammerspoon.app" ]]; then
+    ok "Hammerspoon already installed"
+  else
+    "$BREW" install --cask hammerspoon
+  fi
+
+  step "Installing Ollama"
+  if command -v ollama >/dev/null 2>&1 || [[ -d /Applications/Ollama.app ]]; then
+    ok "Ollama already installed ($(command -v ollama || echo /Applications/Ollama.app))"
+  else
+    "$BREW" install ollama
+  fi
+
+  step "Downloading Whisper model ($whisper_model)"
+  mkdir -p "$MODEL_DIR"
+  local model_path="$MODEL_DIR/$whisper_model"
+  if [[ -n "${SKIP_WHISPER_MODEL:-}" ]]; then
+    ok "skipped (SKIP_WHISPER_MODEL set)"
+  elif [[ -s "$model_path" ]]; then
+    ok "already present: $model_path"
+  else
+    # Resumable download to a .part file, then verify and move into place.
+    # Abort a stalled transfer (<10 KB/s for 60 s) and resume, up to 5 times.
+    local attempt
+    for attempt in 1 2 3 4 5; do
+      if curl -L --fail --retry 3 --speed-limit 10240 --speed-time 60 \
+           -C - -o "$model_path.part" "$whisper_url"; then
+        break
+      fi
+      [[ $attempt -eq 5 ]] && die "download failed; re-run 'voice-draft setup' to resume"
+      warn "download interrupted, resuming (attempt $((attempt + 1)) of 5)"
+      sleep 2
+    done
+    local expected="" actual
+    if command -v python3 >/dev/null 2>&1; then
+      expected="$(curl -s --fail "$whisper_api" | python3 -c '
+import json, sys
+name = sys.argv[1]
+for f in json.load(sys.stdin):
+    if f.get("path") == name and f.get("lfs"):
+        print(f["lfs"].get("oid", ""))
+' "$whisper_model" 2>/dev/null || true)"
+    fi
+    if [[ -n "$expected" ]]; then
+      actual="$(shasum -a 256 "$model_path.part" | awk '{print $1}')"
+      if [[ "$actual" != "$expected" ]]; then
+        rm -f "$model_path.part"
+        die "checksum mismatch for $whisper_model (expected $expected, got $actual)"
+      fi
+      ok "sha256 verified"
+    else
+      warn "could not fetch published checksum; skipping verification"
+    fi
+    mv "$model_path.part" "$model_path"
+    ok "saved to $model_path"
+  fi
+
+  step "Starting Ollama"
+  if ollama_up; then
+    ok "already running at $OLLAMA_URL"
+  else
+    if "$BREW" list --formula ollama >/dev/null 2>&1; then
+      "$BREW" services start ollama
+    elif [[ -d /Applications/Ollama.app ]]; then
+      open -a Ollama
+    else
+      nohup "$(ollama_bin)" serve >/dev/null 2>&1 &
+    fi
+    local _
+    for _ in $(seq 1 30); do ollama_up && break; sleep 1; done
+    ollama_up || die "Ollama did not start; try 'ollama serve' and re-run"
+    ok "running at $OLLAMA_URL"
+  fi
+
+  step "Pulling cleanup model ($ollama_model)"
+  if ollama_has "$ollama_model"; then
+    ok "already pulled"
+  else
+    "$(ollama_bin)" pull "$ollama_model"
+  fi
+
+  step "Linking into Hammerspoon"
+  mkdir -p "$HS_DIR"
+  if [[ -e "$HS_LINK" && ! -L "$HS_LINK" ]]; then
+    die "$HS_LINK exists and is not a symlink; move it aside and re-run"
+  fi
+  local target
+  target="$(code_dir)"
+  ln -sfn "$target" "$HS_LINK"
+  ok "$HS_LINK -> $target"
+
+  touch "$HS_INIT"
+  if grep -Eq '^[^-]*require[[:space:]]*\(?[[:space:]]*["'\'']dictation["'\'']' "$HS_INIT"; then
+    ok "require(\"dictation\") already in $HS_INIT"
+  else
+    printf '\n-- voice-draft\nrequire("dictation")\n' >> "$HS_INIT"
+    ok "added require(\"dictation\") to $HS_INIT"
+  fi
+
+  if [[ "$ollama_model" != "qwen2.5:3b" ]]; then
+    warn "remember to choose $ollama_model as the cleanup model in the voice-draft menu"
+  fi
+
+  step "Starting Hammerspoon"
+  if hammerspoon_running; then
+    hs_run 'hs.timer.doAfter(0.1, hs.reload)' 5 >/dev/null || true
+  else
+    open -g -a Hammerspoon
+  fi
+  sleep 3
+
+  step "Running doctor"
+  cmd_doctor || true
+
+  cat <<EOF
+
+Done. Next steps:
+  1. Grant Hammerspoon Accessibility and Microphone access in
+     System Settings > Privacy & Security.
+  2. Press Ctrl+Option+D to start dictating, and again to stop.
+  3. Optional: 'voice-draft autoupdate on' to install updates automatically.
+EOF
+}
+
+###########################################################################
+# doctor
+###########################################################################
+
+cmd_doctor() {
+  local out
+  if out="$(hs_run 'dictation.doctor()' 15)" && [[ "$out" == *"voice-draft doctor"* ]]; then
+    printf '%s\n' "$out" | grep -v -e '^-- Loading' -e '^true' -e '^false' || true
+    [[ "$out" == *"All checks passed."* ]]
+    return
+  fi
+  # Shell-level checks; permissions can only be checked inside Hammerspoon.
+  local fail=0 model="${OLLAMA_MODEL:-qwen2.5:3b}"
+  check() {
+    if eval "$2" >/dev/null 2>&1; then echo "  [PASS] $1"; else echo "  [FAIL] $1"; fail=1; fi
+  }
+  echo "voice-draft doctor (Hammerspoon not reachable; shell checks only)"
+  check "sox"                 "[[ -x /opt/homebrew/bin/sox || -x /usr/local/bin/sox ]]"
+  check "whisper-cli"         "[[ -x /opt/homebrew/bin/whisper-cli || -x /usr/local/bin/whisper-cli ]]"
+  check "whisper model"       "ls '$MODEL_DIR'/ggml-*.bin"
+  check "ollama reachable"    "ollama_up"
+  check "ollama model pulled" "ollama_has '$model'"
+  check "hammerspoon link"    "[[ -L '$HS_LINK' ]]"
+  echo
+  echo "Start Hammerspoon and re-run 'voice-draft doctor' to check permissions."
+  return $fail
+}
+
+###########################################################################
+# update
+###########################################################################
+
+cmd_update() {
+  [[ "${1:-}" == "--quiet" ]] && QUIET=1
+  local kind before after changed=0
+  kind="$(install_kind)"
+  before="$VERSION"
+  [[ $QUIET -eq 1 ]] && echo "$(date '+%Y-%m-%d %H:%M:%S') update check (installed $before, $kind)"
+
+  case "$kind" in
+    brew)
+      "$BREW" update --quiet >/dev/null 2>&1 || warn "brew update failed"
+      if "$BREW" outdated --quiet "$TAP_FORMULA" | grep -q .; then
+        step "Upgrading voice-draft"
+        "$BREW" upgrade "$TAP_FORMULA"
+        changed=1
+      fi
+      after="$(cat "$("$BREW" --prefix)/opt/voice-draft/libexec/VERSION")"
+      ;;
+    git)
+      step "Pulling latest changes"
+      local head_before
+      head_before="$(git -C "$ROOT" rev-parse HEAD)"
+      git -C "$ROOT" pull --ff-only --quiet
+      [[ "$(git -C "$ROOT" rev-parse HEAD)" != "$head_before" ]] && changed=1
+      after="$(cat "$ROOT/VERSION")"
+      ;;
+    *)
+      die "can't update this install; reinstall with 'brew install $TAP_FORMULA'"
+      ;;
+  esac
+
+  if [[ $changed -eq 0 ]]; then
+    info "voice-draft $after is up to date."
+    [[ $QUIET -eq 1 ]] && echo "  up to date ($after)"
+    return 0
+  fi
+
+  # Reload Hammerspoon, but never in the middle of a dictation.
+  local state
+  if ! hammerspoon_running; then
+    info "Hammerspoon isn't running; the new version loads when it starts."
+  elif state="$(hs_run 'print(dictation.reload_when_idle())' 10)"; then
+    state="$(printf '%s' "$state" | tail -1)"
+    if [[ "$state" == IDLE ]]; then
+      info "Reloaded Hammerspoon."
+    else
+      info "Hammerspoon will reload when the current dictation finishes."
+    fi
+  else
+    # Versions before 0.2 have no reload_when_idle(); reload directly.
+    hs_run 'hs.timer.doAfter(0.2, hs.reload)' 5 >/dev/null || true
+    info "Reloaded Hammerspoon."
+  fi
+  info "voice-draft $before -> $after"
+  [[ $QUIET -eq 1 ]] && echo "  updated $before -> $after"
+  return 0
+}
+
+###########################################################################
+# autoupdate
+###########################################################################
+
+write_agent_plist() {
+  local cli path_env
+  cli="$(cli_path)"
+  path_env="$(dirname "$BREW"):/usr/bin:/bin:/usr/sbin:/sbin"
+  mkdir -p "$(dirname "$AGENT_PLIST")" "$(dirname "$UPDATE_LOG")"
+  cat > "$AGENT_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$AGENT_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$cli</string>
+    <string>update</string>
+    <string>--quiet</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$path_env</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$UPDATE_LOG</string>
+  <key>StandardErrorPath</key>
+  <string>$UPDATE_LOG</string>
+</dict>
+</plist>
+EOF
+}
+
+agent_loaded() { launchctl print "gui/$(id -u)/$AGENT_LABEL" >/dev/null 2>&1; }
+
+cmd_autoupdate() {
+  case "${1:-status}" in
+    on)
+      [[ "$(install_kind)" != other ]] || die "auto-update needs a Homebrew or git install"
+      agent_loaded && launchctl bootout "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null || true
+      write_agent_plist
+      launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST"
+      echo "Auto-update is on: checks daily at 10:00 (or on next wake)."
+      echo "Log: $UPDATE_LOG"
+      ;;
+    off)
+      agent_loaded && launchctl bootout "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null || true
+      rm -f "$AGENT_PLIST"
+      echo "Auto-update is off."
+      ;;
+    status)
+      if agent_loaded; then
+        echo "Auto-update is on (daily at 10:00). Log: $UPDATE_LOG"
+      else
+        echo "Auto-update is off. Turn it on with: voice-draft autoupdate on"
+      fi
+      ;;
+    *) die "usage: voice-draft autoupdate on|off|status" ;;
+  esac
+}
+
+###########################################################################
+# config
+###########################################################################
+
+cmd_config() {
+  if hs_run 'if dictation.settings then dictation.settings() else error("no settings window") end' 10 >/dev/null; then
+    echo "Opened voice-draft settings."
+    return 0
+  fi
+  # Fallback: open the hand-edited overrides file.
+  mkdir -p "$CONFIG_DIR"
+  if [[ ! -f "$OVERRIDES" ]]; then
+    cat > "$OVERRIDES" <<'EOF'
+-- voice-draft overrides. Only include settings you want to change; they win
+-- over the defaults and over anything set in the settings UI.
+-- Reload Hammerspoon after editing.
+return {
+  -- cleanup = { ollama = { model = "gemma4:latest", think = false } },
+}
+EOF
+  fi
+  open -t "$OVERRIDES"
+  echo "Opened $OVERRIDES"
+}
+
+###########################################################################
+# uninstall
+###########################################################################
+
+cmd_uninstall() {
+  local purge=0
+  [[ "${1:-}" == "--purge" ]] && purge=1
+
+  step "Removing auto-update job"
+  cmd_autoupdate off >/dev/null
+  ok "done"
+
+  step "Unlinking from Hammerspoon"
+  if [[ -L "$HS_LINK" ]]; then
+    rm "$HS_LINK"
+    ok "removed $HS_LINK"
+  fi
+  if [[ -f "$HS_INIT" ]] && grep -q 'require("dictation")' "$HS_INIT"; then
+    cp "$HS_INIT" "$HS_INIT.voice-draft.bak"
+    # Drop our require line and the marker comment above it.
+    awk '
+      /^-- (voice-draft|Local Dictation)$/ { held = $0; next }
+      /^require\("dictation"\)$/ { held = ""; next }
+      { if (held != "") { print held; held = "" } print }
+      END { if (held != "") print held }
+    ' "$HS_INIT.voice-draft.bak" > "$HS_INIT"
+    ok "removed require(\"dictation\") from $HS_INIT (backup: $HS_INIT.voice-draft.bak)"
+  fi
+  hs_run 'hs.timer.doAfter(0.1, hs.reload)' 5 >/dev/null || true
+
+  if [[ $purge -eq 0 && -t 0 && -d "$DATA_DIR" ]]; then
+    local reply
+    read -r -p "Delete the Whisper model and settings ($DATA_DIR, $CONFIG_DIR)? [y/N] " reply
+    [[ "$reply" =~ ^[Yy]$ ]] && purge=1
+  fi
+  if [[ $purge -eq 1 ]]; then
+    step "Deleting models and settings"
+    rm -rf "$DATA_DIR" "$CONFIG_DIR"
+    ok "removed $DATA_DIR and $CONFIG_DIR"
+  fi
+
+  echo
+  echo "voice-draft is unlinked. Ollama models were left alone (see 'ollama list')."
+  if [[ "$(install_kind)" == brew ]]; then
+    echo "To remove the package: brew uninstall voice-draft"
+  fi
+}
+
+###########################################################################
+
+usage() {
+  sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'
+}
+
+main() {
+  local cmd="${1:-help}"
+  [[ $# -gt 0 ]] && shift
+  case "$cmd" in
+    setup)      cmd_setup "$@" ;;
+    doctor)     cmd_doctor "$@" ;;
+    update)     cmd_update "$@" ;;
+    autoupdate) cmd_autoupdate "$@" ;;
+    config)     cmd_config "$@" ;;
+    uninstall)  cmd_uninstall "$@" ;;
+    version|--version|-v)
+      echo "voice-draft $VERSION"
+      if [[ "${1:-}" == "--verbose" ]]; then
+        echo "  install: $(install_kind) ($ROOT)"
+        echo "  hammerspoon code: $(code_dir)"
+        echo "  linked: $(readlink "$HS_LINK" 2>/dev/null || echo "not linked")"
+        echo "  autoupdate: $(agent_loaded && echo on || echo off)"
+      fi
+      ;;
+    help|--help|-h) usage ;;
+    *) usage; exit 1 ;;
+  esac
+}
+
+main "$@"

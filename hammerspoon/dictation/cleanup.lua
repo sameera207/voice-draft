@@ -272,8 +272,8 @@ function M.stage1(text)
 
   local paragraphs = {}
   s = s:gsub("\r\n?", "\n")
-  for para in (s .. "\n\n"):gmatch("(.-)\n%s*\n") do
-    para = para:gsub("%s*\n%s*", " ")
+  for raw_para in (s .. "\n\n"):gmatch("(.-)\n%s*\n") do
+    local para = raw_para:gsub("%s*\n%s*", " ")
     local cleaned = clean_paragraph(para)
     if cleaned ~= "" then paragraphs[#paragraphs + 1] = cleaned end
   end

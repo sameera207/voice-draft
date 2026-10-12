@@ -69,7 +69,7 @@ local function ollama_checks(cfg, add)
   add("ollama model pulled", found, found and o.model or ("missing: ollama pull " .. o.model))
 end
 
-function M.run(cfg)
+function M.run(cfg, version)
   local results = M.local_checks(cfg)
   local function add(name, ok, detail) results[#results + 1] = { name = name, ok = ok, detail = detail } end
 
@@ -85,7 +85,7 @@ function M.run(cfg)
   end
 
   local all_ok = true
-  print("voice-draft doctor")
+  print("voice-draft doctor (version " .. tostring(version or "dev") .. ")")
   for _, r in ipairs(results) do
     all_ok = all_ok and r.ok
     print(string.format("  [%s] %-26s %s", r.ok and "PASS" or "FAIL", r.name, r.detail or ""))

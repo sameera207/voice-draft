@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install lua lua@5.4 shellcheck
+
+      - name: Syntax check (Lua 5.4 and 5.5)
+        run: |
+          L54="$(brew --prefix lua@5.4)/bin"
+          for f in hammerspoon/dictation/*.lua; do
+            "$L54/luac" -p "$f"
+            luac -p "$f"
+          done
+
+      - name: Unit tests (Lua 5.4, as shipped in Hammerspoon)
+        run: |
+          "$(brew --prefix lua@5.4)/bin/lua" tests/cleanup_spec.lua
+
+      - name: Unit tests (Lua 5.5)
+        run: lua tests/cleanup_spec.lua
+
+      - name: shellcheck
+        run: shellcheck bin/voice-draft install.sh
+
+      - name: CLI smoke test
+        run: |
+          bin/voice-draft version
+          bin/voice-draft help

@@ -24,6 +24,7 @@ local run = nil            -- current dictation: { wav, app, t0, ... }
 local watchdog, max_timer, perm_timer = nil, nil, nil
 local hk_toggle, hk_cancel = nil, nil
 local system_prompt = nil
+local reload_pending, reload_timer = false, nil
 
 local LOG_PATH = os.getenv("HOME") .. "/Library/Logs/voice-draft.log"
 
@@ -41,18 +42,29 @@ local function log_text(label, text)
 end
 
 ---------------------------------------------------------------------------
--- Prompt file (repo/prompts/cleanup_system.txt, found through the symlink)
+-- Files at the install root (found through the ~/.hammerspoon symlink)
 ---------------------------------------------------------------------------
 
-local function load_system_prompt()
+local ROOT = (function()
   local src = debug.getinfo(1, "S").source:gsub("^@", "")
   local dir = src:match("^(.*)/[^/]*$") or "."
   local real = hs.fs.pathToAbsolute(dir) or dir
-  local path = real .. "/../../prompts/cleanup_system.txt"
-  local f = io.open(path, "r")
-  if not f then return nil, path end
-  local template = f:read("*a")
+  return hs.fs.pathToAbsolute(real .. "/../..") or (real .. "/../..")
+end)()
+
+local function read_root_file(name)
+  local f = io.open(ROOT .. "/" .. name, "r")
+  if not f then return nil end
+  local s = f:read("*a")
   f:close()
+  return s
+end
+
+M.version = cleanup.trim(read_root_file("VERSION") or "dev")
+
+local function load_system_prompt()
+  local template = read_root_file("prompts/cleanup_system.txt")
+  if not template then return nil, ROOT .. "/prompts/cleanup_system.txt" end
   return cleanup.render_system_prompt(template, cfg.vocabulary)
 end
 
@@ -95,6 +107,9 @@ finish = function(message)
   run = nil
   set_state("IDLE")
   if message then ui.alert(message) end
+  if reload_pending then
+    reload_timer = hs.timer.doAfter(1.5, hs.reload) -- let the alert show first
+  end
 end
 
 local function elapsed(t0)
@@ -250,7 +265,18 @@ function M.cancel()
 end
 
 function M.doctor()
-  return doctor.run(cfg)
+  return doctor.run(cfg, M.version)
+end
+
+-- Reload Hammerspoon now if idle, otherwise as soon as the current
+-- dictation finishes. Used by `voice-draft update`. Returns the state.
+function M.reload_when_idle()
+  if state == "IDLE" then
+    reload_timer = hs.timer.doAfter(0.2, hs.reload) -- let the hs CLI call return
+  else
+    reload_pending = true
+  end
+  return state
 end
 
 function M.state()
@@ -259,7 +285,7 @@ end
 
 local function menu()
   local items = {
-    { title = "voice-draft: " .. ui.label(state), disabled = true },
+    { title = "voice-draft " .. M.version .. " · " .. ui.label(state), disabled = true },
     { title = "-" },
     { title = state == "RECORDING" and "Stop recording" or "Start recording",
       fn = M.toggle, disabled = state ~= "IDLE" and state ~= "RECORDING" },
