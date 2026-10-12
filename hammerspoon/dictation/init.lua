@@ -1,4 +1,4 @@
--- Local Dictation: entry point, state machine and hotkeys.
+-- voice-draft: entry point, state machine and hotkeys.
 --
 -- IDLE -> RECORDING -> TRANSCRIBING -> CLEANING -> INSERTING -> IDLE
 -- Only one dictation runs at a time. Every failure returns to IDLE, and a
@@ -25,7 +25,7 @@ local watchdog, max_timer, perm_timer = nil, nil, nil
 local hk_toggle, hk_cancel = nil, nil
 local system_prompt = nil
 
-local LOG_PATH = os.getenv("HOME") .. "/Library/Logs/local-dictation.log"
+local LOG_PATH = os.getenv("HOME") .. "/Library/Logs/voice-draft.log"
 
 local function log(msg)
   if not cfg.debug then return end
@@ -259,7 +259,7 @@ end
 
 local function menu()
   local items = {
-    { title = "Local Dictation: " .. ui.label(state), disabled = true },
+    { title = "voice-draft: " .. ui.label(state), disabled = true },
     { title = "-" },
     { title = state == "RECORDING" and "Stop recording" or "Start recording",
       fn = M.toggle, disabled = state ~= "IDLE" and state ~= "RECORDING" },

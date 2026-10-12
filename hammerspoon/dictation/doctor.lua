@@ -85,7 +85,7 @@ function M.run(cfg)
   end
 
   local all_ok = true
-  print("Local Dictation doctor")
+  print("voice-draft doctor")
   for _, r in ipairs(results) do
     all_ok = all_ok and r.ok
     print(string.format("  [%s] %-26s %s", r.ok and "PASS" or "FAIL", r.name, r.detail or ""))

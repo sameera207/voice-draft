@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local Dictation installer. Idempotent; never uses sudo.
+# voice-draft installer. Idempotent; never uses sudo.
 #
 #   ./install.sh                     install everything
 #   OLLAMA_MODEL=llama3.2:3b ./install.sh   pull a different cleanup model
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODEL_DIR="$HOME/.local/share/local-dictation/models"
+MODEL_DIR="$HOME/.local/share/voice-draft/models"
 WHISPER_MODEL="${WHISPER_MODEL:-ggml-large-v3-turbo.bin}"
 WHISPER_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$WHISPER_MODEL"
 WHISPER_API="https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main"
@@ -138,12 +138,12 @@ touch "$HS_INIT"
 if grep -Eq '^[^-]*require[[:space:]]*\(?[[:space:]]*["'\'']dictation["'\'']' "$HS_INIT"; then
   ok "require(\"dictation\") already in $HS_INIT"
 else
-  printf '\n-- Local Dictation\nrequire("dictation")\n' >> "$HS_INIT"
+  printf '\n-- voice-draft\nrequire("dictation")\n' >> "$HS_INIT"
   ok "added require(\"dictation\") to $HS_INIT"
 fi
 
 if [[ "$OLLAMA_MODEL" != "qwen2.5:3b" ]]; then
-  warn "remember to set cleanup.ollama.model = \"$OLLAMA_MODEL\" in ~/.config/local-dictation/overrides.lua"
+  warn "remember to set cleanup.ollama.model = \"$OLLAMA_MODEL\" in ~/.config/voice-draft/overrides.lua"
 fi
 
 step "Starting Hammerspoon"

@@ -28,7 +28,7 @@ function M.set_state(state)
   if not bar then return end
   local icon = ICONS[state] or ICONS.WORKING
   bar:setTitle(icon)
-  bar:setTooltip("Local Dictation: " .. (LABELS[state] or state))
+  bar:setTooltip("voice-draft: " .. (LABELS[state] or state))
 end
 
 function M.label(state)

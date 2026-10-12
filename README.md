@@ -1,4 +1,6 @@
-# Local Dictation for macOS
+# voice-draft
+
+Local dictation for macOS.
 
 Press a hotkey, speak, and press it again. A cleaned-up transcript is pasted
 into the app you were using, such as Claude Desktop or Claude Code in iTerm2.
@@ -19,11 +21,51 @@ address.
 
 Requirements: an Apple Silicon Mac and [Homebrew](https://brew.sh).
 
+## How it works
+
+```mermaid
+flowchart LR
+    U([You]) -->|Ctrl+Option+D| HS[Hammerspoon<br/>init.lua]
+    HS -->|start| REC[recorder.lua<br/>SoX → 16 kHz WAV]
+    HS -.->|preload model| OL
+    REC -.->|last 30 s, every ~1 s| LIVE[live.lua<br/>preview transcript]
+    LIVE -.-> OV[overlay.lua<br/>timer · level · live text]
+    U -->|Ctrl+Option+D again| HS
+    REC -->|full WAV| TR[transcriber.lua<br/>whisper.cpp<br/>large-v3-turbo]
+    TR -->|raw text| S1[cleanup.lua stage 1<br/>regex: fillers, repeats]
+    S1 -->|≥ 15 words, mode = llm| OL[cleanup.lua stage 2<br/>Ollama qwen2.5:3b<br/>localhost only]
+    OL -->|validated reply| INS
+    OL -.->|rejected / timeout| INS
+    S1 -->|short or mode = regex| INS[inserter.lua<br/>clipboard + Cmd+V]
+    INS -->|same app still focused| APP[Claude Desktop /<br/>Claude Code in iTerm2]
+    INS -.->|focus changed| CB[Left on clipboard]
+```
+
+Solid lines are the main path; dotted lines are background work or fallbacks.
+If the LLM reply is rejected or Ollama is unavailable, the stage 1 text is
+pasted instead.
+
+### State machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> RECORDING: hotkey
+    RECORDING --> TRANSCRIBING: hotkey / 5 min limit
+    RECORDING --> IDLE: cancel / < 0.5 s
+    TRANSCRIBING --> CLEANING: text heard
+    TRANSCRIBING --> IDLE: nothing heard
+    CLEANING --> INSERTING
+    INSERTING --> IDLE: pasted, clipboard restored
+    TRANSCRIBING --> IDLE: cancel
+    CLEANING --> IDLE: cancel
+```
+
 ## Install
 
 ```sh
-git clone <this repo> local-dictation
-cd local-dictation
+git clone https://github.com/sameera207/voice-draft.git
+cd voice-draft
 ./install.sh
 ```
 
@@ -34,7 +76,7 @@ The installer is idempotent, so you can re-run it safely. It does not use
 2. Installs `sox`, `whisper-cpp`, Hammerspoon and Ollama. Anything already
    installed is left alone.
 3. Downloads the Whisper model (about 1.6 GB) to
-   `~/.local/share/local-dictation/models/` and verifies its SHA-256.
+   `~/.local/share/voice-draft/models/` and verifies its SHA-256.
 4. Starts Ollama and pulls `qwen2.5:3b`.
 5. Symlinks `hammerspoon/dictation` to `~/.hammerspoon/dictation`.
 6. Appends `require("dictation")` to `~/.hammerspoon/init.lua` if that line
@@ -145,12 +187,12 @@ The model is preloaded when you start recording, with `keep_alive` set to
 ## Configuration
 
 Defaults live in `hammerspoon/dictation/config.lua`. Put your changes in
-`~/.config/local-dictation/overrides.lua`, which is merged on top of the
+`~/.config/voice-draft/overrides.lua`, which is merged on top of the
 defaults and is never touched by upgrades. Only include the keys you want to
 change:
 
 ```lua
--- ~/.config/local-dictation/overrides.lua
+-- ~/.config/voice-draft/overrides.lua
 return {
   cleanup = { ollama = { model = "gemma4:latest", think = false } },
   vocabulary = { "Claude Code", "MCP", "Hammerspoon", "worktree", "Kubernetes" },
@@ -165,8 +207,8 @@ Reload Hammerspoon after editing the file.
 | `hotkey_toggle` | `{mods={"ctrl","alt"}, key="d"}` | |
 | `hotkey_cancel` | `{mods={"ctrl","alt","shift"}, key="d"}` | |
 | `paths.sox`, `paths.whisper` | `nil` (auto-detect) | Looks in `/opt/homebrew/bin`, then `/usr/local/bin`. |
-| `paths.model` | `~/.local/share/local-dictation/models/ggml-large-v3-turbo.bin` | |
-| `paths.tmp_wav` | `/tmp/local-dictation.wav` | |
+| `paths.model` | `~/.local/share/voice-draft/models/ggml-large-v3-turbo.bin` | |
+| `paths.tmp_wav` | `/tmp/voice-draft.wav` | |
 | `recording.min_seconds` / `max_seconds` | `0.5` / `300` | |
 | `whisper.language` | `"en"` | `"auto"` detects the language. |
 | `whisper.threads` | `nil` | `nil` uses the whisper-cli default. |
@@ -188,7 +230,7 @@ Reload Hammerspoon after editing the file.
 | `ui.live_text` | `true` | Live preview transcript in the panel. Runs Whisper repeatedly while you record. |
 | `ui.live_text_interval` | `1.0` | Seconds to wait between preview runs. |
 | `ui.live_text_window` | `30` | The preview transcribes only the last N seconds. |
-| `debug` | `false` | Logs timings and errors to `~/Library/Logs/local-dictation.log`. |
+| `debug` | `false` | Logs timings and errors to `~/Library/Logs/voice-draft.log`. |
 | `log_text` | `false` | With `debug`, also logs transcripts. |
 | `keep_audio` | `false` | Keeps the temp WAV after transcription. |
 
@@ -259,7 +301,7 @@ Start with `dictation.doctor()` in the Hammerspoon console.
   shaders on the first run after an install or upgrade. Later runs are
   faster.
 - **Logs.** Set `debug = true` in overrides. The log is at
-  `~/Library/Logs/local-dictation.log`.
+  `~/Library/Logs/voice-draft.log`.
 
 ## Uninstall
 
@@ -268,5 +310,5 @@ rm ~/.hammerspoon/dictation
 ```
 
 Then delete the `require("dictation")` line from `~/.hammerspoon/init.lua`.
-To reclaim disk space, also run `rm -r ~/.local/share/local-dictation` and
+To reclaim disk space, also run `rm -r ~/.local/share/voice-draft` and
 `ollama rm qwen2.5:3b`.

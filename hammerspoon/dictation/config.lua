@@ -1,4 +1,4 @@
--- Default settings, merged with ~/.config/local-dictation/overrides.lua.
+-- Default settings, merged with ~/.config/voice-draft/overrides.lua.
 -- The override file returns a table with only the keys you want to change,
 -- e.g.  return { cleanup = { ollama = { model = "llama3.2:3b" } } }
 
@@ -6,7 +6,7 @@ local M = {}
 
 local HOME = os.getenv("HOME") or ""
 
-M.override_path = HOME .. "/.config/local-dictation/overrides.lua"
+M.override_path = HOME .. "/.config/voice-draft/overrides.lua"
 
 function M.defaults()
   return {
@@ -16,8 +16,8 @@ function M.defaults()
     paths = {            -- nil means auto-detect in /opt/homebrew/bin, /usr/local/bin
       sox = nil,
       whisper = nil,
-      model = HOME .. "/.local/share/local-dictation/models/ggml-large-v3-turbo.bin",
-      tmp_wav = "/tmp/local-dictation.wav",
+      model = HOME .. "/.local/share/voice-draft/models/ggml-large-v3-turbo.bin",
+      tmp_wav = "/tmp/voice-draft.wav",
     },
 
     recording = { min_seconds = 0.5, max_seconds = 300 },
@@ -50,7 +50,7 @@ function M.defaults()
       live_text_window = 30,     -- preview transcribes only the last N seconds
     },
 
-    debug = false,         -- true: log to ~/Library/Logs/local-dictation.log, never log transcripts unless log_text = true
+    debug = false,         -- true: log to ~/Library/Logs/voice-draft.log, never log transcripts unless log_text = true
     log_text = false,
     keep_audio = false,
   }
