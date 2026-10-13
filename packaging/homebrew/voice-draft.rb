@@ -5,6 +5,7 @@ class VoiceDraft < Formula
   homepage "https://github.com/sameera207/voice-draft"
   url "https://github.com/sameera207/voice-draft/releases/download/v@VERSION@/voice-draft-@VERSION@.tar.gz"
   sha256 "@SHA256@"
+  license "MIT"
 
   depends_on arch: :arm64
   depends_on :macos

@@ -105,3 +105,14 @@ brew uninstall voice-draft
 - measured latency
 - troubleshooting
 - developing from source
+
+## License
+
+[MIT](LICENSE) © 2026 sameera207.
+
+voice-draft builds on other open-source projects, each under its own
+license: [Hammerspoon](https://www.hammerspoon.org) (MIT),
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT),
+[Ollama](https://ollama.com) (MIT), [SoX](https://sox.sourceforge.net)
+(GPL/LGPL) and the Whisper and Ollama models, which you download
+separately under their own terms.
