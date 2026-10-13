@@ -326,6 +326,18 @@ cmd_update() {
       ;;
   esac
 
+  # Also catch upgrades done outside this command (a plain `brew upgrade`):
+  # Hammerspoon keeps running the old code until it reloads.
+  if [[ $changed -eq 0 ]] && hammerspoon_running; then
+    local running
+    running="$(hs_run 'print(dictation and dictation.version or "")' 5 2>/dev/null | tail -1 || true)"
+    if [[ -n "$running" && "$running" != "$after" ]]; then
+      info "Hammerspoon is running $running; reloading to load $after."
+      before="$running"
+      changed=1
+    fi
+  fi
+
   if [[ $changed -eq 0 ]]; then
     info "voice-draft $after is up to date."
     [[ $QUIET -eq 1 ]] && echo "  up to date ($after)"
