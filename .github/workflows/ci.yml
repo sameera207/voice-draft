@@ -25,10 +25,11 @@ jobs:
 
       - name: Unit tests (Lua 5.4, as shipped in Hammerspoon)
         run: |
-          "$(brew --prefix lua@5.4)/bin/lua" tests/cleanup_spec.lua
+          for t in tests/*_spec.lua; do "$(brew --prefix lua@5.4)/bin/lua" "$t"; done
 
       - name: Unit tests (Lua 5.5)
-        run: lua tests/cleanup_spec.lua
+        run: |
+          for t in tests/*_spec.lua; do lua "$t"; done
 
       - name: shellcheck
         run: shellcheck bin/voice-draft install.sh

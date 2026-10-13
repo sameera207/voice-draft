@@ -438,7 +438,7 @@ cmd_config() {
 -- over the defaults and over anything set in the settings UI.
 -- Reload Hammerspoon after editing.
 return {
-  -- cleanup = { ollama = { model = "gemma4:latest", think = false } },
+  -- cleanup = { ollama = { model = "gemma4:latest" } },
 }
 EOF
   fi

@@ -114,6 +114,9 @@ check("validate: allows 'Sure' when speaker said it",
 local ocfg = { model = "qwen2.5:3b", keep_alive = "30m" }
 local req = cleanup.build_request("hello world", ocfg, "SYS")
 check("request: model", req.model, "qwen2.5:3b")
+check("request: think omitted when nil", req.think, nil)
+check("request: think false from defaults",
+  cleanup.build_request("hi", config.defaults().cleanup.ollama, "S").think, false)
 check("request: stream", req.stream, false)
 check("request: temperature", req.options.temperature, 0)
 check("request: num_predict min", req.options.num_predict, 256)

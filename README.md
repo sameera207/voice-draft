@@ -228,21 +228,33 @@ The model is preloaded when you start recording, with `keep_alive` set to
 
 ## Configuration
 
-Defaults live in `hammerspoon/dictation/config.lua`. Put your changes in
-`~/.config/voice-draft/overrides.lua`, which is merged on top of the
-defaults and is never touched by upgrades. Only include the keys you want to
-change:
+The quickest way to change settings is the menu bar icon (🎙). It has
+pickers for the cleanup model (listed live from Ollama), cleanup mode,
+Whisper model and language, plus toggles for the live text preview, the
+overlay panel and sounds. Changes apply immediately, with no reload.
+
+Settings come from three layers, and later layers win:
+
+1. **Defaults**, in `hammerspoon/dictation/config.lua`.
+2. **`~/.config/voice-draft/settings.json`**, written by the menu. It only
+   holds values you changed from the default.
+3. **`~/.config/voice-draft/overrides.lua`**, which you edit by hand. Use it
+   for anything the menu doesn't cover. Upgrades never touch it.
+
+A setting in `overrides.lua` wins over the menu. The menu shows it as
+"(set in overrides.lua)" and you can't change it there. Only include the
+keys you want to change:
 
 ```lua
 -- ~/.config/voice-draft/overrides.lua
 return {
-  cleanup = { ollama = { model = "gemma4:latest", think = false } },
   vocabulary = { "Claude Code", "MCP", "Hammerspoon", "worktree", "Kubernetes" },
-  ui = { sounds = true },
+  hotkey_toggle = { mods = { "ctrl", "alt" }, key = "space" },
 }
 ```
 
-Reload Hammerspoon after editing the file.
+Open it with 🎙 → **Edit overrides.lua…**, or with `voice-draft config`.
+Reload Hammerspoon after editing it.
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -264,7 +276,7 @@ Reload Hammerspoon after editing the file.
 | `cleanup.ollama.keep_alive` | `"30m"` | |
 | `cleanup.ollama.timeout_seconds` | `8` | |
 | `cleanup.ollama.preload_on_record` | `true` | |
-| `cleanup.ollama.think` | `nil` | Set to `false` for thinking models such as qwen3 or gemma4. |
+| `cleanup.ollama.think` | `false` | Disables reasoning on thinking models such as qwen3 or gemma4, which makes them much faster. Other models ignore it. |
 | `insert.restore_clipboard_after_ms` | `300` | |
 | `insert.require_same_app` | `true` | |
 | `ui.menubar` / `alerts` / `sounds` | `true` / `true` / `false` | |
@@ -282,19 +294,23 @@ Reload Hammerspoon after editing the file.
 ollama pull llama3.2:3b
 ```
 
-Then set `cleanup = { ollama = { model = "llama3.2:3b" } }` in overrides and
-reload Hammerspoon. Models worth comparing: `qwen2.5:3b`, `llama3.2:3b` and
-`gemma3:4b`. If quality matters more than speed, try a 7B or 8B model. A
-32 GB M-series Mac runs those comfortably.
+Then choose it under 🎙 → **Cleanup model**. Models worth comparing:
+`qwen2.5:3b`, `llama3.2:3b` and `gemma3:4b`. If quality matters more than
+speed, try a 7B or 8B model; a 32 GB M-series Mac runs those comfortably.
 
 ## Tests
 
 ```sh
-lua tests/cleanup_spec.lua     # or: luajit tests/cleanup_spec.lua
+for t in tests/*_spec.lua; do lua "$t"; done     # or luajit
 ```
 
-The tests cover stage 1, LLM output validation, request building, Whisper
-output filtering and config merging. They need no Hammerspoon.
+The tests need no Hammerspoon. They cover:
+
+- stage 1 cleanup and LLM output validation
+- request building and Whisper output filtering
+- settings layering, locked keys and saving
+
+CI runs them on Lua 5.4 (the version Hammerspoon ships) and Lua 5.5.
 
 ## Measured latency
 

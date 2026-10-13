@@ -24,6 +24,13 @@ function M.teardown()
   if bar then bar:delete(); bar = nil end
 end
 
+-- Show a menu just below the menu bar icon (used by `voice-draft config`).
+function M.popup(items)
+  if not bar then return end
+  local f = bar:frame()
+  hs.menubar.new(false):setMenu(items):popupMenu({ x = f.x, y = f.y + f.h })
+end
+
 function M.set_state(state)
   if not bar then return end
   local icon = ICONS[state] or ICONS.WORKING

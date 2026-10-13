@@ -18,7 +18,9 @@ local doctor = require("dictation.doctor")
 
 local M = {}
 
-local cfg, cfg_err = config.load()
+local cfg, cfg_err, cfg_info = config.load({ decode = hs.json.decode })
+local settings = cfg_info.settings -- what settings.json holds; the UI saves this
+local locked = cfg_info.locked     -- keys set in overrides.lua (read-only in the UI)
 local state = "IDLE"
 local run = nil            -- current dictation: { wav, app, t0, ... }
 local watchdog, max_timer, perm_timer = nil, nil, nil
@@ -283,7 +285,105 @@ function M.state()
   return state
 end
 
+---------------------------------------------------------------------------
+-- Settings (menu bar)
+---------------------------------------------------------------------------
+
+local ollama_models = nil -- cached names from /api/tags; nil until fetched
+
+local function refresh_ollama_models()
+  local url = cfg.cleanup.ollama.url
+  if not cleanup.is_loopback_url(url) then return end
+  hs.http.asyncGet(url .. "/api/tags", nil, function(status, body)
+    if status ~= 200 then ollama_models = nil; return end
+    local ok, data = pcall(hs.json.decode, body or "")
+    if not ok or type(data) ~= "table" then return end
+    local names = {}
+    for _, m in ipairs(data.models or {}) do names[#names + 1] = m.name end
+    table.sort(names)
+    ollama_models = names
+  end)
+end
+
+local function whisper_models()
+  local dir = cfg.paths.model:match("^(.*)/[^/]*$")
+  local files = {}
+  local ok, iter, obj = pcall(hs.fs.dir, dir)
+  if ok and iter then
+    for name in iter, obj do
+      if name:match("^ggml%-.+%.bin$") then files[#files + 1] = dir .. "/" .. name end
+    end
+  end
+  table.sort(files)
+  return files
+end
+
+local function save_settings()
+  hs.fs.mkdir(config.config_dir)
+  local ok, err = config.save_settings(settings, function(t)
+    return next(t) == nil and "{}" or hs.json.encode(t, true)
+  end)
+  if not ok then ui.alert("Couldn't save settings: " .. tostring(err), 4) end
+  return ok
+end
+
+-- Apply a setting now and persist it to settings.json.
+function M.set(key, value)
+  if config.is_locked(locked, key) then
+    ui.alert(key .. " is set in overrides.lua")
+    return false
+  end
+  config.set_path(cfg, key, value)
+  config.set_setting(settings, key, value)
+  if key == "ui.overlay" and not value then overlay.hide() end
+  if key == "vocabulary" then system_prompt = load_system_prompt() end
+  if key == "cleanup.ollama.model" and cfg.cleanup.mode == "llm" then
+    pcall(cleanup.preload, cfg.cleanup.ollama) -- warm the new model
+  end
+  return save_settings()
+end
+
+local function overrides_template()
+  hs.fs.mkdir(config.config_dir)
+  if hs.fs.attributes(config.override_path) then return end
+  local f = io.open(config.override_path, "w")
+  if not f then return end
+  f:write([[
+-- voice-draft overrides. Only include settings you want to change; they win
+-- over the defaults and over anything set in the menu or settings window.
+-- Reload Hammerspoon after editing.
+return {
+  -- cleanup = { ollama = { model = "gemma4:latest" } },
+}
+]])
+  f:close()
+end
+
+-- A menu item bound to a setting, disabled when overrides.lua sets it.
+local function item(title, key, value, checked)
+  local is_locked = config.is_locked(locked, key)
+  return {
+    title = title, checked = checked, disabled = is_locked,
+    fn = function() M.set(key, value) end,
+  }
+end
+
+local function toggle(title, key)
+  local on = config.get_path(cfg, key) and true or false
+  local it = item(title, key, not on, on)
+  if it.disabled then it.title = title .. " (set in overrides.lua)" end
+  return it
+end
+
+local function submenu(title, key, entries)
+  local t = { title = title, menu = entries }
+  if config.is_locked(locked, key) then t.title = title .. " (set in overrides.lua)" end
+  return t
+end
+
 local function menu()
+  refresh_ollama_models() -- for next time; the menu is built synchronously
+
   local items = {
     { title = "voice-draft " .. M.version .. " · " .. ui.label(state), disabled = true },
     { title = "-" },
@@ -292,12 +392,60 @@ local function menu()
     { title = "Cancel", fn = M.cancel, disabled = state == "IDLE" },
     { title = "-" },
   }
+
+  -- Cleanup model
+  local current = cfg.cleanup.ollama.model
+  local models, seen = {}, false
+  for _, name in ipairs(ollama_models or {}) do
+    seen = seen or name == current or name == current .. ":latest"
+    models[#models + 1] = item(name, "cleanup.ollama.model", name,
+      name == current or name == current .. ":latest")
+  end
+  if not seen then
+    table.insert(models, 1, { title = current .. (ollama_models and "  (not pulled)" or ""), checked = true, disabled = true })
+  end
+  if not ollama_models then
+    models[#models + 1] = { title = "Ollama not reachable", disabled = true }
+  end
+  models[#models + 1] = { title = "-" }
+  models[#models + 1] = { title = "Pull more with: ollama pull <model>", disabled = true }
+  items[#items + 1] = submenu("Cleanup model: " .. current, "cleanup.ollama.model", models)
+
+  -- Cleanup mode
+  local mode_labels = { off = "Off (raw transcript)", regex = "Quick (regex only)", llm = "Full (regex + LLM)" }
   local modes = {}
   for _, m in ipairs({ "off", "regex", "llm" }) do
-    modes[#modes + 1] = { title = m, checked = cfg.cleanup.mode == m,
-      fn = function() cfg.cleanup.mode = m end }
+    modes[#modes + 1] = item(mode_labels[m], "cleanup.mode", m, cfg.cleanup.mode == m)
   end
-  items[#items + 1] = { title = "Cleanup mode (this session)", menu = modes }
+  items[#items + 1] = submenu("Cleanup mode", "cleanup.mode", modes)
+
+  -- Whisper model
+  local wm = {}
+  for _, path in ipairs(whisper_models()) do
+    local name = path:match("ggml%-(.+)%.bin$")
+    wm[#wm + 1] = item(name, "paths.model", path, path == cfg.paths.model)
+  end
+  if #wm == 0 then wm[1] = { title = "No models in " .. cfg.paths.model:match("^(.*)/"), disabled = true } end
+  items[#items + 1] = submenu("Whisper model", "paths.model", wm)
+
+  -- Language
+  items[#items + 1] = submenu("Language", "whisper.language", {
+    item("English", "whisper.language", "en", cfg.whisper.language == "en"),
+    item("Auto-detect", "whisper.language", "auto", cfg.whisper.language == "auto"),
+  })
+
+  items[#items + 1] = { title = "-" }
+  items[#items + 1] = toggle("Live text preview", "ui.live_text")
+  items[#items + 1] = toggle("Overlay panel", "ui.overlay")
+  items[#items + 1] = toggle("Sounds", "ui.sounds")
+  items[#items + 1] = { title = "-" }
+  if M.open_settings_window then
+    items[#items + 1] = { title = "Settings…", fn = function() M.open_settings_window() end }
+  end
+  items[#items + 1] = { title = "Edit overrides.lua…", fn = function()
+    overrides_template()
+    hs.task.new("/usr/bin/open", nil, { "-t", config.override_path }):start()
+  end }
   items[#items + 1] = { title = "Run doctor", fn = function()
     hs.openConsole()
     M.doctor()
@@ -305,6 +453,17 @@ local function menu()
   items[#items + 1] = { title = "Reload Hammerspoon", fn = hs.reload }
   return items
 end
+
+-- `voice-draft config`: open the settings window, or the menu as a fallback.
+-- Deferred so a `hs -c` caller returns instead of waiting on the open menu.
+local popup_timer = nil
+function M.settings()
+  popup_timer = hs.timer.doAfter(0.05, function()
+    if M.open_settings_window then M.open_settings_window() else ui.popup(menu()) end
+  end)
+end
+
+M.menu_items = menu -- for inspection from the console
 
 local function bind_hotkeys()
   if hk_toggle then return end
@@ -314,6 +473,7 @@ end
 
 function M.start()
   ui.setup(cfg, menu)
+  refresh_ollama_models()
   if cfg_err then ui.alert("Dictation: " .. cfg_err, 5) end
 
   if not cleanup.is_loopback_url(cfg.cleanup.ollama.url) then
