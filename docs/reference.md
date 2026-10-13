@@ -1,0 +1,317 @@
+# voice-draft reference
+
+The details behind the [README](../README.md).
+
+- [Setup](#setup)
+- [Updates](#updates)
+- [Commands](#commands)
+- [How dictation behaves](#how-dictation-behaves)
+- [Cleanup](#cleanup)
+- [Settings](#settings)
+- [Whisper models](#whisper-models)
+- [Cleanup models](#cleanup-models)
+- [Measured latency](#measured-latency)
+- [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
+- [Development](#development)
+
+## Setup
+
+`voice-draft setup` is idempotent, so you can re-run it safely. It does not
+use `sudo`. It does the following:
+
+1. Checks for Apple Silicon and Homebrew.
+2. Installs Hammerspoon and Ollama if they're missing. Homebrew already
+   installed `sox` and `whisper-cpp` as dependencies.
+3. Downloads the Whisper model (about 1.6 GB) to
+   `~/.local/share/voice-draft/models/` and verifies its SHA-256.
+4. Starts Ollama and pulls `qwen2.5:3b`.
+5. Links the code into `~/.hammerspoon/dictation`.
+6. Appends `require("dictation")` to `~/.hammerspoon/init.lua` if that line
+   isn't there. Nothing else in the file is changed.
+7. Runs the doctor.
+
+Setup options are set with environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `OLLAMA_MODEL=llama3.2:3b` | Pull a different cleanup model, then choose it in the menu. |
+| `WHISPER_MODEL=large-v3-turbo-q5_0` | Download a different Whisper model instead (see [Whisper models](#whisper-models)). |
+| `SKIP_WHISPER_MODEL=1` | Skip the Whisper download. |
+
+## Updates
+
+```sh
+voice-draft update            # upgrade now
+voice-draft autoupdate on     # opt in to a daily check
+voice-draft autoupdate off
+voice-draft autoupdate status
+```
+
+`update` runs `brew upgrade voice-draft`, or `git pull` for a source
+install. It then reloads Hammerspoon. If a dictation is in progress, the
+reload waits until it finishes.
+
+Automatic updates are off unless you turn them on. `autoupdate on`
+installs a macOS LaunchAgent that runs `voice-draft update` once a day at
+10:00, or on the next wake. Its log is
+`~/Library/Logs/voice-draft-update.log`. Update checks run outside
+Hammerspoon, so the dictation tool itself still only talks to Ollama on
+localhost.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `voice-draft setup` | Install dependencies, download the model, link into Hammerspoon. |
+| `voice-draft doctor` | Check dependencies and permissions. |
+| `voice-draft update [--quiet]` | Upgrade and reload. |
+| `voice-draft autoupdate on\|off\|status` | Manage daily automatic updates. |
+| `voice-draft models [list\|download\|remove]` | List, download or delete Whisper models. |
+| `voice-draft config` | Open the settings window. |
+| `voice-draft uninstall [--purge]` | Unlink from Hammerspoon. `--purge` also deletes the model and settings. |
+| `voice-draft version` | Print the installed version. |
+
+## How dictation behaves
+
+- The text goes to the app that was focused when you stopped recording. If
+  you switch apps before the text is ready, it is left on the clipboard and
+  you'll see "Dictation ready on clipboard".
+- Your clipboard is saved before the paste and restored about 300 ms after.
+  The pasted transcript is marked transient, so clipboard managers skip it.
+- Enter is never pressed.
+- Recordings shorter than 0.5 s are discarded. Recording stops automatically
+  after 5 minutes and the transcript is still pasted.
+- Silence shows "Nothing heard". Whisper's stock hallucinations, such as
+  `[BLANK_AUDIO]` or a lone "Thank you.", are filtered out.
+- The temp WAV file is deleted after transcription.
+
+The live transcript in the floating panel is a preview. It comes from
+re-running Whisper on the last 30 s of audio, so it can lag a little or
+change as you go. The pasted text always comes from the full recording.
+
+## Cleanup
+
+| `cleanup.mode` | What happens |
+| --- | --- |
+| `off` | Raw Whisper text. Only artifact tags are removed. |
+| `regex` | Stage 1 only: a fast, deterministic pass. |
+| `llm` (default) | Stage 1, then stage 2 (Ollama) if the text has at least `llm_min_words` (15) words. |
+
+**Stage 1** (`cleanup.stage1`, pure Lua):
+
+- Strips Whisper tags.
+- Removes `um`, `uh`, `uhm`, `er`, `erm`, `ah` and `hmm`. It keeps "like"
+  and "so".
+- Removes "you know" and "I mean" when they are set off by commas, or start
+  a sentence and are followed by a comma.
+- Collapses repeated words and short phrases ("the the", "I want to I want
+  to").
+- Joins stray line breaks, fixes spaces before punctuation, and capitalizes
+  the first letter.
+- Never touches code-like tokens: paths, flags, identifiers, numbers or
+  anything in backticks.
+
+**Stage 2** sends the stage 1 text to Ollama with the prompt in
+`prompts/cleanup_system.txt` and two few-shot examples. The transcript is
+wrapped in `<transcript>` tags. The reply is rejected, and stage 1 text is
+used instead, if it:
+
+- is empty
+- starts with a preamble such as "Sure" or "Here is"
+- is shorter than 40% or longer than 130% of the input, counted in words
+
+Matching quotes or tags around the reply are stripped before these checks.
+If Ollama is down, the model is missing or the request takes longer than
+8 s, you get stage 1 text and an alert explaining why.
+
+The model is preloaded when you start recording, with `keep_alive` set to
+30 minutes, so it is warm by the time you stop.
+
+## Settings
+
+Settings come from three layers, and later layers win:
+
+1. **Defaults**, in `hammerspoon/dictation/config.lua`.
+2. **`~/.config/voice-draft/settings.json`**, written by the menu. It only
+   holds values you changed from the default.
+3. **`~/.config/voice-draft/overrides.lua`**, which you edit by hand. Use it
+   for anything the menu doesn't cover. Upgrades never touch it.
+
+A setting in `overrides.lua` wins over the menu. The menu shows it as
+"(set in overrides.lua)" and you can't change it there. Only include the
+keys you want to change:
+
+```lua
+-- ~/.config/voice-draft/overrides.lua
+return {
+  vocabulary = { "Claude Code", "MCP", "Hammerspoon", "worktree", "Kubernetes" },
+  hotkey_toggle = { mods = { "ctrl", "alt" }, key = "space" },
+}
+```
+
+Open it with 🎙 → **Edit overrides.lua…** or from the Advanced tab of the
+settings window. Reload Hammerspoon after editing it.
+
+All settings:
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `hotkey_toggle` | `{mods={"ctrl","alt"}, key="d"}` | |
+| `hotkey_cancel` | `{mods={"ctrl","alt","shift"}, key="d"}` | |
+| `paths.sox`, `paths.whisper` | `nil` (auto-detect) | Looks in `/opt/homebrew/bin`, then `/usr/local/bin`. |
+| `paths.model` | `~/.local/share/voice-draft/models/ggml-large-v3-turbo.bin` | |
+| `paths.tmp_wav` | `/tmp/voice-draft.wav` | |
+| `recording.min_seconds` / `max_seconds` | `0.5` / `300` | |
+| `whisper.language` | `"en"` | `"auto"` detects the language. |
+| `whisper.threads` | `nil` | `nil` uses the whisper-cli default. |
+| `whisper.extra_args` | `{}` | Extra flags passed to whisper-cli. |
+| `whisper.timeout_seconds` | `120` | |
+| `vocabulary` | Claude Code, MCP, … | Passed to Whisper as its initial prompt (first 12 terms) and to the LLM as known terms. |
+| `cleanup.mode` | `"llm"` | `"off"`, `"regex"` or `"llm"`. |
+| `cleanup.llm_min_words` | `15` | Shorter dictations skip the LLM. |
+| `cleanup.ollama.url` | `http://localhost:11434` | Must be a loopback address. |
+| `cleanup.ollama.model` | `"qwen2.5:3b"` | |
+| `cleanup.ollama.keep_alive` | `"30m"` | |
+| `cleanup.ollama.timeout_seconds` | `8` | |
+| `cleanup.ollama.preload_on_record` | `true` | |
+| `cleanup.ollama.think` | `false` | Disables reasoning on thinking models such as qwen3 or gemma4, which makes them much faster. Other models ignore it. |
+| `insert.restore_clipboard_after_ms` | `300` | |
+| `insert.require_same_app` | `true` | |
+| `ui.menubar` / `alerts` / `sounds` | `true` / `true` / `false` | |
+| `ui.overlay` | `true` | Floating panel with timer, level meter and status. |
+| `ui.live_text` | `true` | Live preview transcript in the panel. Runs Whisper repeatedly while you record. |
+| `ui.live_text_interval` | `1.0` | Seconds to wait between preview runs. |
+| `ui.live_text_window` | `30` | The preview transcribes only the last N seconds. |
+| `debug` | `false` | Logs timings and errors to `~/Library/Logs/voice-draft.log`. |
+| `log_text` | `false` | With `debug`, also logs transcripts. |
+| `keep_audio` | `false` | Keeps the temp WAV after transcription. |
+
+## Whisper models
+
+Pick the speech-to-text model in 🎙 → **Settings…** → **Transcription**, or
+via 🎙 → **Whisper model** → **More models…**. Click **Download** next to a
+model, select it once it's downloaded, then **Save**. Downloads can be
+cancelled and resumed later. Models you aren't using can be deleted.
+
+| Model | Size | Notes |
+| --- | --- | --- |
+| `large-v3-turbo` | 1.6 GB | Best accuracy, all languages. The default. |
+| `large-v3-turbo-q8_0` | 874 MB | Nearly the same accuracy at half the size. |
+| `large-v3-turbo-q5_0` | 574 MB | Slightly less accurate, a third of the size. |
+| `medium.en` | 1.5 GB | Good accuracy, English only. Slower than turbo. |
+| `small.en` / `small` | 488 MB | Faster. `.en` models are English only. |
+| `base.en` | 148 MB | Very fast, noticeably less accurate. |
+| `tiny.en` | 78 MB | Fastest, mostly for testing. |
+
+The same works from the terminal:
+
+```sh
+voice-draft models                      # list, with what's installed
+voice-draft models download small.en
+voice-draft models remove small.en
+```
+
+Models download from the whisper.cpp repository on Hugging Face into
+`~/.local/share/voice-draft/models/`. Each one is checked against a SHA-256
+pinned in `whisper-models.tsv`, and a download that doesn't match is
+discarded. The download runs in the `voice-draft` command (using `curl`), not
+inside Hammerspoon.
+
+## Cleanup models
+
+```sh
+ollama pull llama3.2:3b
+```
+
+Then choose it under 🎙 → **Cleanup model**. Or pull and compare models
+from 🎙 → **Settings…** → **Cleanup**. Models worth comparing:
+`qwen2.5:3b`, `llama3.2:3b` and `gemma3:4b`. If quality matters more than
+speed, try a 7B or 8B model; a 32 GB M-series Mac runs those comfortably.
+
+## Measured latency
+
+Measured on an Apple M5 with 32 GB of RAM. Every dictation prints a timing
+line to the Hammerspoon console:
+
+```
+[dictation] audio 30.2s | transcribe 2.10s | cleanup 1.40s (llm) | total 3.60s
+```
+
+Measured on 2026-10-12 with a 34 s rambling dictation (synthesized with
+`say`, with fillers, a restart and a question) run through the real
+modules inside Hammerspoon. The totals add up the stage timings plus the
+300 ms clipboard-restore wait.
+
+| Scenario | Transcribe | Cleanup | Total (stop to paste) |
+| --- | --- | --- | --- |
+| 34 s dictation, `regex` mode | 1.96 s | <0.01 s | ≈2.3 s |
+| 34 s dictation, `llm` mode (`qwen2.5:3b`, warm) | 1.96 s | 1.89 s | ≈4.2 s |
+| First dictation after Hammerspoon starts | 8.6 s | — | — |
+
+The first transcription after Hammerspoon starts is slower while the model
+file and Metal kernels load. Later runs use the warm figures above.
+
+## Troubleshooting
+
+Start with `dictation.doctor()` in the Hammerspoon console.
+
+- **Nothing happens on the hotkey.** Accessibility isn't granted, or another
+  app owns Ctrl+Option+D. Check the console for alerts.
+- **"Nothing heard" every time.** Microphone permission is probably denied,
+  so SoX records silence. Enable Hammerspoon under Privacy & Security →
+  Microphone, then quit and reopen Hammerspoon. To test recording outside
+  Hammerspoon, run `sox -d -r 16000 -c 1 -b 16 /tmp/t.wav` in a terminal and
+  press Ctrl+C to stop.
+- **"Cleanup unavailable".** Run `ollama serve` (or
+  `brew services start ollama`) and `ollama pull <model>`. Dictation still
+  works with regex cleanup in the meantime.
+- **The LLM changed my meaning.** Lower `cleanup.mode` to `"regex"`, raise
+  `llm_min_words`, or try another model. Rejected LLM replies are logged
+  when `debug = true`.
+- **Pasted into the wrong place.** The paste goes to the app that was
+  focused when recording stopped. If focus changes, the text is left on the
+  clipboard.
+- **The first transcription is slow.** whisper.cpp compiles its Metal
+  shaders on the first run after an install or upgrade. Later runs are
+  faster.
+- **Logs.** Set `debug = true` in overrides. The log is at
+  `~/Library/Logs/voice-draft.log`.
+
+## Uninstall
+
+```sh
+voice-draft uninstall        # asks whether to delete the model and settings
+brew uninstall voice-draft
+```
+
+This removes the Hammerspoon link, the `require("dictation")` line and the
+auto-update job. It keeps a backup of `~/.hammerspoon/init.lua`. Ollama
+models are left alone; remove them with `ollama rm qwen2.5:3b`.
+
+## Development
+
+Clone the repo and install from your checkout. Hammerspoon then runs the
+code straight from the repo:
+
+```sh
+git clone https://github.com/sameera207/voice-draft.git
+cd voice-draft
+./install.sh        # same as: bin/voice-draft setup
+```
+
+### Tests
+
+```sh
+for t in tests/*_spec.lua; do lua "$t"; done     # or luajit
+```
+
+The tests need no Hammerspoon. They cover:
+
+- stage 1 cleanup and LLM output validation
+- request building and Whisper output filtering
+- settings layering, locked keys and saving
+
+CI runs them on Lua 5.4 (the version Hammerspoon ships) and Lua 5.5.
+
+Releases are tag-driven; see [RELEASING.md](../RELEASING.md).
