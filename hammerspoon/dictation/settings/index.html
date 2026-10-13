@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voice-draft settings</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --panel: #ffffff; --sidebar: #ececee; --text: #1d1d1f;
+    --muted: #6e6e73; --border: #d9d9de; --accent: #e5483f; --accent-text: #ffffff;
+    --field: #ffffff; --field-border: #c9c9cf; --error: #c4281c; --ok: #1f8a3b;
+    --code: #f0f0f3; --selected: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e20; --panel: #26262a; --sidebar: #1a1a1c; --text: #f2f2f4;
+      --muted: #9a9aa2; --border: #38383e; --accent: #ff5a4f; --accent-text: #ffffff;
+      --field: #1f1f22; --field-border: #46464d; --error: #ff6b5e; --ok: #4cc26a;
+      --code: #1b1b1e; --selected: #303035; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    background: var(--bg); color: var(--text);
+    display: grid; grid-template-columns: 172px 1fr; grid-template-rows: 1fr auto;
+    -webkit-user-select: none; user-select: none;
+  }
+  nav {
+    grid-row: 1 / 3; background: var(--sidebar); border-right: 1px solid var(--border);
+    padding: 16px 10px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 2px 8px 14px; font-weight: 600; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  .brand small { font-weight: 400; color: var(--muted); }
+  nav button {
+    all: unset; padding: 6px 10px; border-radius: 6px; cursor: default; color: var(--text);
+  }
+  nav button[aria-selected="true"] { background: var(--selected); box-shadow: var(--shadow); font-weight: 600; }
+  nav .spacer { flex: 1; }
+  nav .privacy { color: var(--muted); font-size: 11px; padding: 0 10px; }
+  main { overflow-y: auto; padding: 22px 26px 10px; }
+  section[hidden] { display: none; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 18px; }
+  .group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 18px; box-shadow: var(--shadow); }
+  .group h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 10px 14px 0; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--border); }
+  .group h2 + .row { border-top: none; }
+  .row.stack { grid-template-columns: 1fr; }
+  .row label.title { font-weight: 500; }
+  .hint { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+  .err { grid-column: 1 / -1; color: var(--error); font-size: 12px; }
+  .lock { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+  .lock::before { content: "🔒 "; }
+  select, input[type=number], input[type=text], textarea {
+    font: inherit; color: var(--text); background: var(--field);
+    border: 1px solid var(--field-border); border-radius: 6px; padding: 4px 8px;
+    -webkit-user-select: text; user-select: text;
+  }
+  select { padding-right: 24px; min-width: 200px; }
+  input[type=number] { width: 90px; text-align: right; }
+  textarea { width: 100%; resize: vertical; min-height: 70px; }
+  :disabled { opacity: .55; }
+  .switch { position: relative; width: 34px; height: 20px; }
+  .switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; z-index: 1; }
+  .switch span { position: absolute; inset: 0; background: var(--field-border); border-radius: 20px; }
+  .switch span::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  body.ready .switch span { transition: background .15s; }
+  body.ready .switch span::after { transition: transform .15s; }
+  .switch input:disabled + span { opacity: .4; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(14px); }
+  .segmented { display: inline-flex; border: 1px solid var(--field-border); border-radius: 7px; overflow: hidden; }
+  .segmented label { padding: 4px 12px; border-left: 1px solid var(--field-border); cursor: default; }
+  .segmented label:first-child { border-left: none; }
+  .segmented input { display: none; }
+  .segmented label:has(input:checked) { background: var(--accent); color: var(--accent-text); }
+  button.btn {
+    font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--field-border);
+    background: var(--field); color: var(--text); cursor: default;
+  }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.btn:disabled { opacity: .5; }
+  .hotkey { min-width: 150px; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: .06em; }
+  .hotkey.recording { border-color: var(--accent); color: var(--accent); }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  progress { width: 160px; accent-color: var(--accent); }
+  .test-out { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .test-out div { background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-height: 64px; -webkit-user-select: text; user-select: text; white-space: pre-wrap; }
+  .test-out h3 { margin: 0 0 4px; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .test-out .time { float: right; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  code { background: var(--code); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font: 12px ui-monospace, Menlo, monospace; -webkit-user-select: text; user-select: text; }
+  footer {
+    display: flex; align-items: center; gap: 8px; padding: 10px 26px;
+    border-top: 1px solid var(--border); background: var(--bg);
+  }
+  footer .status { flex: 1; color: var(--muted); }
+  footer .status.ok { color: var(--ok); }
+  footer .status.bad { color: var(--error); }
+</style>
+</head>
+<body>
+<nav role="tablist" aria-label="Settings sections">
+  <div class="brand"><span class="dot"></span>voice-draft <small id="version"></small></div>
+  <button role="tab" data-tab="general" aria-selected="true">General</button>
+  <button role="tab" data-tab="cleanup">Cleanup</button>
+  <button role="tab" data-tab="transcription">Transcription</button>
+  <button role="tab" data-tab="advanced">Advanced</button>
+  <div class="spacer"></div>
+  <p class="privacy">Everything runs on this Mac. This window makes no network requests.</p>
+</nav>
+
+<main>
+  <section data-panel="general">
+    <h1>General</h1>
+    <p class="lede">Hotkeys and on-screen feedback.</p>
+    <div class="group">
+      <h2>Hotkeys</h2>
+      <div class="row" data-row="hotkey_toggle">
+        <label class="title">Start / stop dictation</label>
+        <button class="btn hotkey" data-key="hotkey_toggle" data-type="hotkey"></button>
+      </div>
+      <div class="row" data-row="hotkey_cancel">
+        <label class="title">Cancel dictation</label>
+        <button class="btn hotkey" data-key="hotkey_cancel" data-type="hotkey"></button>
+        <span class="hint">Click a shortcut, then press the new key combination. Esc cancels.</span>
+      </div>
+    </div>
+    <div class="group">
+      <h2>While dictating</h2>
+      <div class="row" data-row="ui.overlay">
+        <label class="title">Show the floating panel</label>
+        <label class="switch"><input type="checkbox" data-key="ui.overlay" data-type="bool"><span></span></label>
+        <span class="hint">Recording dot, timer and level meter near the bottom of the screen.</span>
+      </div>
+      <div class="row" data-row="ui.live_text">
+        <label class="title">Live text preview</label>
+        <label class="switch"><input type="checkbox" data-key="ui.live_text" data-type="bool"><span></span></label>
+        <span class="hint">Shows an approximate transcript while you speak. Uses the GPU continuously while recording.</span>
+      </div>
+      <div class="row" data-row="ui.sounds">
+        <label class="title">Start and stop sounds</label>
+        <label class="switch"><input type="checkbox" data-key="ui.sounds" data-type="bool"><span></span></label>
+      </div>
+      <div class="row" data-row="ui.alerts">
+        <label class="title">On-screen alerts</label>
+        <label class="switch"><input type="checkbox" data-key="ui.alerts" data-type="bool"><span></span></label>
+        <span class="hint">Messages such as "Nothing heard". When off, they go to the Hammerspoon console.</span>
+      </div>
+    </div>
+  </section>
+
+  <section data-panel="cleanup" hidden>
+    <h1>Cleanup</h1>
+    <p class="lede">How the transcript is tidied before it's pasted.</p>
+    <div class="group">
+      <h2>Mode</h2>
+      <div class="row" data-row="cleanup.mode">
+        <label class="title">Cleanup</label>
+        <div class="segmented" data-key="cleanup.mode" data-type="radio">
+          <label><input type="radio" name="mode" value="off">Off</label>
+          <label><input type="radio" name="mode" value="regex">Quick</label>
+          <label><input type="radio" name="mode" value="llm">Full</label>
+        </div>
+        <span class="hint"><b>Off</b>: raw Whisper text. <b>Quick</b>: removes fillers and repeats instantly. <b>Full</b>: Quick, then a local LLM fixes false starts and punctuation.</span>
+      </div>
+      <div class="row" data-row="cleanup.ollama.model">
+        <label class="title">LLM model</label>
+        <select data-key="cleanup.ollama.model" data-type="select"></select>
+        <span class="hint" id="ollama-status"></span>
+      </div>
+      <div class="row">
+        <label class="title">Pull another model</label>
+        <div class="inline">
+          <input type="text" id="pull-name" placeholder="llama3.2:3b" spellcheck="false" style="width:150px">
+          <button class="btn" id="pull-btn">Pull</button>
+        </div>
+        <div class="hint inline" id="pull-progress" hidden><progress max="100" value="0"></progress><span></span></div>
+      </div>
+      <div class="row" data-row="cleanup.llm_min_words">
+        <label class="title">Use the LLM from this many words</label>
+        <input type="number" min="0" max="1000" step="1" data-key="cleanup.llm_min_words" data-type="number">
+        <span class="hint">Shorter dictations skip the LLM and paste almost instantly.</span>
+      </div>
+      <div class="row" data-row="cleanup.ollama.timeout_seconds">
+        <label class="title">LLM timeout (seconds)</label>
+        <input type="number" min="1" max="120" step="1" data-key="cleanup.ollama.timeout_seconds" data-type="number">
+        <span class="hint">If the model takes longer, the Quick cleanup text is pasted instead.</span>
+      </div>
+      <div class="row stack" data-row="vocabulary">
+        <label class="title">Vocabulary</label>
+        <textarea data-key="vocabulary" data-type="list" rows="3" spellcheck="false" placeholder="One term per line"></textarea>
+        <span class="hint">Names and technical terms to spell correctly, one per line. The first 12 also guide Whisper.</span>
+      </div>
+    </div>
+    <div class="group">
+      <h2>Test cleanup</h2>
+      <div class="row stack">
+        <textarea id="test-text" rows="3" spellcheck="false">so um I want to, I want to refactor the the session module, no wait, the auth module, and uh can you tell me which tests will break</textarea>
+        <div class="inline"><button class="btn" id="test-btn">Run test</button><span class="hint" id="test-model"></span></div>
+        <div class="test-out">
+          <div><h3>Quick <span class="time" id="t1"></span></h3><span id="out1"></span></div>
+          <div><h3>Full (LLM) <span class="time" id="t2"></span></h3><span id="out2"></span></div>
+        </div>
+        <div class="note" id="test-note"></div>
+      </div>
+    </div>
+  </section>
+
+  <section data-panel="transcription" hidden>
+    <h1>Transcription</h1>
+    <p class="lede">Speech-to-text with whisper.cpp.</p>
+    <div class="group">
+      <h2>Whisper</h2>
+      <div class="row" data-row="paths.model">
+        <label class="title">Model</label>
+        <select data-key="paths.model" data-type="select"></select>
+        <span class="hint">Files in <code id="models-dir"></code>. Download others with <code>WHISPER_MODEL=… voice-draft setup</code>.</span>
+      </div>
+      <div class="row" data-row="whisper.language">
+        <label class="title">Language</label>
+        <select data-key="whisper.language" data-type="select">
+          <option value="en">English</option>
+          <option value="auto">Auto-detect</option>
+        </select>
+      </div>
+      <div class="row" data-row="whisper.threads">
+        <label class="title">CPU threads</label>
+        <input type="number" min="1" max="64" step="1" placeholder="auto" data-key="whisper.threads" data-type="number-optional">
+        <span class="hint">Leave blank for the whisper.cpp default. The GPU does most of the work.</span>
+      </div>
+      <div class="row" data-row="recording.max_seconds">
+        <label class="title">Maximum recording (seconds)</label>
+        <input type="number" min="10" max="1800" step="10" data-key="recording.max_seconds" data-type="number">
+        <span class="hint">Recording stops automatically at this length and the text is still pasted.</span>
+      </div>
+    </div>
+  </section>
+
+  <section data-panel="advanced" hidden>
+    <h1>Advanced</h1>
+    <p class="lede">Pasting, privacy and troubleshooting.</p>
+    <div class="group">
+      <h2>Pasting</h2>
+      <div class="row" data-row="insert.require_same_app">
+        <label class="title">Paste only into the app I dictated in</label>
+        <label class="switch"><input type="checkbox" data-key="insert.require_same_app" data-type="bool"><span></span></label>
+        <span class="hint">If you switch apps before the text is ready, it's left on the clipboard instead.</span>
+      </div>
+    </div>
+    <div class="group">
+      <h2>Logging</h2>
+      <div class="row" data-row="debug">
+        <label class="title">Debug log</label>
+        <label class="switch"><input type="checkbox" data-key="debug" data-type="bool"><span></span></label>
+        <span class="hint">Timings and errors in <code>~/Library/Logs/voice-draft.log</code>.</span>
+      </div>
+      <div class="row" data-row="log_text">
+        <label class="title">Include transcripts in the log</label>
+        <label class="switch"><input type="checkbox" data-key="log_text" data-type="bool"><span></span></label>
+        <span class="hint">Only applies with the debug log on. Turn off when you're done troubleshooting.</span>
+      </div>
+      <div class="row" data-row="keep_audio">
+        <label class="title">Keep recordings</label>
+        <label class="switch"><input type="checkbox" data-key="keep_audio" data-type="bool"><span></span></label>
+        <span class="hint">Leaves the last recording in <code>/tmp/voice-draft.wav</code> instead of deleting it.</span>
+      </div>
+    </div>
+    <div class="group">
+      <h2>Overrides</h2>
+      <div class="row">
+        <label class="title">Hand-edited settings</label>
+        <button class="btn" id="overrides-btn">Open overrides.lua</button>
+        <span class="hint">Anything set in <code id="overrides-path"></code> wins over this window and shows a 🔒 here.</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span class="status" id="status"></span>
+  <button class="btn" id="revert-btn" disabled>Revert</button>
+  <button class="btn primary" id="save-btn" disabled>Save</button>
+</footer>
+
+<script>
+(() => {
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const post = (msg) => window.webkit.messageHandlers.voicedraft.postMessage(msg);
+
+  let state = null;         // last state from Hammerspoon
+  let form = {};            // current form values by dotted key
+  let recording = null;     // hotkey button being recorded
+
+  // ---------- tabs ----------
+  $$("nav [role=tab]").forEach((b) => b.addEventListener("click", () => {
+    $$("nav [role=tab]").forEach((x) => x.setAttribute("aria-selected", x === b));
+    $$("section[data-panel]").forEach((p) => p.hidden = p.dataset.panel !== b.dataset.tab);
+  }));
+
+  // ---------- hotkeys ----------
+  const MOD_SYMBOL = { ctrl: "⌃", alt: "⌥", shift: "⇧", cmd: "⌘" };
+  const MOD_ORDER = ["ctrl", "alt", "shift", "cmd"];
+  const KEY_NAMES = { space: "Space", return: "Return", tab: "Tab", delete: "Delete",
+    left: "←", right: "→", up: "↑", down: "↓" };
+  const CODE_KEYS = { Space: "space", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]",
+    Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/", Backslash: "\\",
+    Backquote: "`", ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+    Enter: "return", Tab: "tab", Backspace: "delete" };
+
+  function hotkeyLabel(hk) {
+    if (!hk || !hk.key) return "None";
+    const mods = MOD_ORDER.filter((m) => (hk.mods || []).includes(m)).map((m) => MOD_SYMBOL[m]).join("");
+    const k = KEY_NAMES[hk.key] || (hk.key.length === 1 ? hk.key.toUpperCase() : hk.key.toUpperCase());
+    return mods + k;
+  }
+  function keyFromCode(code) {
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+    if (/^Digit\d$/.test(code)) return code.slice(5);
+    if (/^F\d{1,2}$/.test(code)) return code.toLowerCase();
+    return CODE_KEYS[code] || null;
+  }
+  function stopRecording() {
+    if (!recording) return;
+    recording.classList.remove("recording");
+    recording.textContent = hotkeyLabel(form[recording.dataset.key]);
+    recording = null;
+    post({ action: "suspend_hotkeys", active: false });
+  }
+  $$("[data-type=hotkey]").forEach((btn) => btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    if (recording === btn) return stopRecording();
+    stopRecording();
+    recording = btn;
+    btn.classList.add("recording");
+    btn.textContent = "Press shortcut…";
+    post({ action: "suspend_hotkeys", active: true }); // so the current hotkey can be pressed
+  }));
+  document.addEventListener("keydown", (e) => {
+    if (recording) {
+      e.preventDefault();
+      if (e.code === "Escape") return stopRecording();
+      const key = keyFromCode(e.code);
+      if (!key) return; // a modifier on its own
+      const mods = [];
+      if (e.ctrlKey) mods.push("ctrl");
+      if (e.altKey) mods.push("alt");
+      if (e.shiftKey) mods.push("shift");
+      if (e.metaKey) mods.push("cmd");
+      if (!mods.length) { recording.textContent = "Add ⌃ ⌥ ⇧ or ⌘"; return; }
+      form[recording.dataset.key] = { mods, key };
+      stopRecording();
+      changed();
+      return;
+    }
+    if (e.metaKey && e.key === "s") { e.preventDefault(); save(); }
+    if (e.metaKey && e.key === "w") { e.preventDefault(); post({ action: "close" }); }
+  });
+
+  // ---------- form <-> state ----------
+  function setOptions(select, options, current) {
+    select.innerHTML = "";
+    let found = false;
+    for (const o of options) {
+      const opt = document.createElement("option");
+      opt.value = o.value; opt.textContent = o.label;
+      if (o.value === current) found = true;
+      select.appendChild(opt);
+    }
+    if (current && !found) {
+      const opt = document.createElement("option");
+      opt.value = current; opt.textContent = current + " (not available)";
+      select.prepend(opt);
+    }
+  }
+
+  function render() {
+    const v = form;
+    $("#version").textContent = state.version;
+    $("#overrides-path").textContent = state.overrides_path.replace(/^\/Users\/[^/]+/, "~");
+
+    setOptions($("[data-key='cleanup.ollama.model']"),
+      state.ollama_models.map((m) => ({ value: m, label: m })), v["cleanup.ollama.model"]);
+    $("#ollama-status").textContent = state.ollama_up
+      ? `${state.ollama_models.length} model${state.ollama_models.length === 1 ? "" : "s"} installed in Ollama.`
+      : "Ollama isn't reachable. Start it with: ollama serve";
+
+    setOptions($("[data-key='paths.model']"),
+      state.whisper_models.map((m) => ({ value: m.path, label: m.name })), v["paths.model"]);
+    const dir = (v["paths.model"] || "").replace(/\/[^/]*$/, "").replace(/^\/Users\/[^/]+/, "~");
+    $("#models-dir").textContent = dir;
+
+    const lang = $("[data-key='whisper.language']");
+    if (![...lang.options].some((o) => o.value === v["whisper.language"])) {
+      const o = document.createElement("option");
+      o.value = v["whisper.language"]; o.textContent = v["whisper.language"];
+      lang.appendChild(o);
+    }
+
+    $$("[data-key]").forEach((el) => {
+      const key = el.dataset.key, type = el.dataset.type, val = v[key];
+      if (type === "bool") el.checked = !!val;
+      else if (type === "radio") $$("input", el).forEach((r) => r.checked = r.value === val);
+      else if (type === "list") el.value = (val || []).join("\n");
+      else if (type === "hotkey") el.textContent = hotkeyLabel(val);
+      else el.value = val === "" || val == null ? "" : val;
+    });
+
+    // Locks from overrides.lua
+    $$("[data-row]").forEach((row) => {
+      const key = row.dataset.row;
+      const isLocked = state.locked.includes(key);
+      row.querySelectorAll("[data-key], [data-key] input").forEach((el) => el.disabled = isLocked);
+      let lock = row.querySelector(".lock");
+      if (isLocked && !lock) {
+        lock = document.createElement("span"); lock.className = "lock";
+        lock.textContent = "Set in overrides.lua"; row.appendChild(lock);
+      } else if (!isLocked && lock) lock.remove();
+    });
+    dependents();
+  }
+
+  // Controls that only matter when another setting is on.
+  function dependents() {
+    const lt = $("[data-key='ui.live_text']");
+    if (!state.locked.includes("ui.live_text")) lt.disabled = !form["ui.overlay"];
+    const lg = $("[data-key='log_text']");
+    if (!state.locked.includes("log_text")) lg.disabled = !form["debug"];
+    const llm = form["cleanup.mode"] === "llm";
+    for (const k of ["cleanup.ollama.model", "cleanup.llm_min_words", "cleanup.ollama.timeout_seconds"]) {
+      if (!state.locked.includes(k)) $(`[data-key='${k}']`).disabled = !llm;
+    }
+  }
+
+  function readForm() {
+    $$("[data-key]").forEach((el) => {
+      const key = el.dataset.key, type = el.dataset.type;
+      if (type === "bool") form[key] = el.checked;
+      else if (type === "radio") { const r = $("input:checked", el); if (r) form[key] = r.value; }
+      else if (type === "list") form[key] = el.value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+      else if (type === "number") form[key] = el.value === "" ? null : Number(el.value);
+      else if (type === "number-optional") form[key] = el.value === "" ? "" : Number(el.value);
+      else if (type === "select") form[key] = el.value;
+    });
+  }
+
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function dirtyKeys() {
+    return Object.keys(form).filter((k) => !state.locked.includes(k) && !same(form[k], state.values[k]));
+  }
+  function setStatus(text, cls = "") {
+    const s = $("#status"); s.textContent = text; s.className = "status " + cls;
+  }
+  // Enable Save/Revert to match the number of unsaved changes.
+  function refreshButtons() {
+    const n = dirtyKeys().length;
+    $("#save-btn").disabled = n === 0;
+    $("#revert-btn").disabled = n === 0;
+    return n;
+  }
+  // Called on user edits: clears old errors and shows the unsaved count.
+  function changed() {
+    readFormKeepHotkeys();
+    dependents();
+    const n = refreshButtons();
+    setStatus(n ? `${n} unsaved change${n === 1 ? "" : "s"}` : "");
+    $$(".err").forEach((e) => e.remove());
+  }
+  function readFormKeepHotkeys() {
+    const hk = { hotkey_toggle: form.hotkey_toggle, hotkey_cancel: form.hotkey_cancel };
+    readForm();
+    Object.assign(form, hk);
+  }
+  $$("[data-key]").forEach((el) => {
+    if (el.dataset.type === "hotkey") return;
+    el.addEventListener("input", changed);
+    el.addEventListener("change", changed);
+  });
+
+  function save() {
+    const keys = dirtyKeys();
+    if (!keys.length) return;
+    const values = {};
+    keys.forEach((k) => values[k] = form[k]);
+    $("#save-btn").disabled = true;
+    setStatus("Saving…");
+    post({ action: "save", values });
+  }
+  $("#save-btn").addEventListener("click", save);
+  $("#revert-btn").addEventListener("click", () => {
+    form = structuredClone(state.values); render(); changed();
+  });
+  $("#overrides-btn").addEventListener("click", () => post({ action: "open_overrides" }));
+
+  // ---------- pull ----------
+  $("#pull-btn").addEventListener("click", () => {
+    const model = $("#pull-name").value.trim();
+    if (!model) return $("#pull-name").focus();
+    $("#pull-btn").disabled = true;
+    post({ action: "pull", model });
+  });
+
+  // ---------- test ----------
+  $("#test-btn").addEventListener("click", () => {
+    $("#test-btn").disabled = true;
+    $("#out1").textContent = ""; $("#out2").textContent = ""; $("#t1").textContent = ""; $("#t2").textContent = "";
+    $("#test-note").textContent = "";
+    post({ action: "test", text: $("#test-text").value, model: form["cleanup.ollama.model"] });
+  });
+
+  // ---------- messages from Hammerspoon ----------
+  const handlers = {
+    state(msg) {
+      const keepDirty = state ? Object.fromEntries(dirtyKeys().map((k) => [k, form[k]])) : {};
+      state = msg;
+      form = Object.assign(structuredClone(msg.values), keepDirty);
+      render();
+      refreshButtons(); // keep any "Saved" status and field errors visible
+      requestAnimationFrame(() => document.body.classList.add("ready"));
+    },
+    saved(msg) {
+      const errKeys = Object.keys(msg.errors || {});
+      for (const k of errKeys) {
+        const row = $(`[data-row='${CSS.escape(k)}']`);
+        if (row) { const e = document.createElement("span"); e.className = "err"; e.textContent = msg.errors[k]; row.appendChild(e); }
+      }
+      if (errKeys.length) setStatus(`Couldn't save ${errKeys.length} setting${errKeys.length === 1 ? "" : "s"}`, "bad");
+      else setStatus(msg.changed.length ? "Saved ✓" : "No changes", "ok");
+      refreshButtons();
+    },
+    test(msg) {
+      $("#out1").textContent = msg.stage1 || "(empty)";
+      if (msg.stage1_seconds != null) $("#t1").textContent = `${(msg.stage1_seconds * 1000).toFixed(0)} ms`;
+      $("#test-model").textContent = msg.model ? `using ${msg.model}` : "";
+      if (msg.running) { $("#out2").textContent = "Running…"; return; }
+      $("#out2").textContent = msg.llm || "—";
+      if (msg.llm_seconds != null) $("#t2").textContent = `${msg.llm_seconds.toFixed(2)} s`;
+      $("#test-note").textContent = msg.note || "";
+      $("#test-btn").disabled = false;
+    },
+    pull(msg) {
+      const box = $("#pull-progress"), bar = $("progress", box), label = $("span", box);
+      box.hidden = false;
+      if (msg.percent != null) { bar.value = msg.percent; label.textContent = `${msg.model}: ${msg.percent}%`; }
+      if (msg.done) {
+        bar.value = msg.ok ? 100 : bar.value;
+        label.textContent = msg.line;
+        $("#pull-btn").disabled = false;
+        if (msg.ok) $("#pull-name").value = "";
+      }
+    },
+  };
+  window.vd = { receive: (msg) => handlers[msg.type] && handlers[msg.type](msg) };
+
+  post({ action: "load" });
+})();
+</script>
+</body>
+</html>

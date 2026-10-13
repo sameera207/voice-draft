@@ -133,6 +133,52 @@ config.set_path(t, "a.b.c", 1)
 check("set_path/get_path", config.get_path(t, "a.b.c"), 1)
 check("get_path missing", config.get_path(t, "a.x.c"), nil)
 
+---------------------------------------------------------------------------
+-- Validation (settings window input)
+---------------------------------------------------------------------------
+
+local function v(key, value) local ok, r = config.validate(key, value); return ok, r end
+
+check("validate: mode ok", select(2, v("cleanup.mode", "regex")), "regex")
+check("validate: mode bad", (v("cleanup.mode", "turbo")), false)
+check("validate: model ok", select(2, v("cleanup.ollama.model", "qwen2.5:3b")), "qwen2.5:3b")
+check("validate: model with namespace", (v("cleanup.ollama.model", "hf.co/org/model:Q4")), true)
+check("validate: model bad", (v("cleanup.ollama.model", "rm -rf /")), false)
+check("validate: min words string number", select(2, v("cleanup.llm_min_words", "20")), 20)
+check("validate: min words fraction", (v("cleanup.llm_min_words", 2.5)), false)
+check("validate: timeout range", (v("cleanup.ollama.timeout_seconds", 500)), false)
+check("validate: language upper", select(2, v("whisper.language", "EN")), "en")
+check("validate: language bad", (v("whisper.language", "english")), false)
+check("validate: threads blank", select(2, v("whisper.threads", "")), nil)
+check("validate: threads blank ok", (v("whisper.threads", "")), true)
+check("validate: threads", select(2, v("whisper.threads", "8")), 8)
+check("validate: model path", (v("paths.model", "/x/ggml-small.bin")), true)
+check("validate: model path bad", (v("paths.model", "/x/model.gguf")), false)
+check("validate: boolean", select(2, v("ui.sounds", false)), false)
+check("validate: boolean bad", (v("ui.sounds", "yes")), false)
+check("validate: unknown key", (v("paths.sox", "/bin/sh")), false)
+local _, vocab = v("vocabulary", { " MCP ", "", "Claude Code", 3 })
+check("validate: vocab trimmed", table.concat(vocab, "|"), "MCP|Claude Code")
+local _, hk = v("hotkey_toggle", { mods = { "ctrl", "alt", "ctrl" }, key = "D" })
+check("validate: hotkey normalized", table.concat(hk.mods, "+") .. "+" .. hk.key, "ctrl+alt+d")
+check("validate: hotkey needs modifier", (v("hotkey_toggle", { mods = {}, key = "d" })), false)
+check("validate: hotkey bad modifier", (v("hotkey_toggle", { mods = { "fn" }, key = "d" })), false)
+
+local okv, errs = config.validate_all({
+  hotkey_toggle = { mods = { "ctrl", "alt" }, key = "d" },
+  hotkey_cancel = { mods = { "alt", "ctrl" }, key = "d" },
+  ["cleanup.mode"] = "llm",
+  ["cleanup.llm_min_words"] = "x",
+})
+check("validate_all: clashing hotkeys", errs.hotkey_cancel ~= nil, true)
+check("validate_all: bad number reported", errs["cleanup.llm_min_words"] ~= nil, true)
+check("validate_all: good value kept", okv["cleanup.mode"].value, "llm")
+local _, errs2 = config.validate_all({
+  hotkey_toggle = { mods = { "ctrl", "alt" }, key = "d" },
+  hotkey_cancel = { mods = { "ctrl", "alt", "shift" }, key = "d" },
+})
+check("validate_all: distinct hotkeys ok", next(errs2), nil)
+
 os.remove(settings_path); os.remove(override_path)
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

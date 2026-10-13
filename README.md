@@ -129,7 +129,7 @@ localhost.
 | `voice-draft doctor` | Check dependencies and permissions. |
 | `voice-draft update [--quiet]` | Upgrade and reload. |
 | `voice-draft autoupdate on\|off\|status` | Manage daily automatic updates. |
-| `voice-draft config` | Open settings. |
+| `voice-draft config` | Open the settings window. |
 | `voice-draft uninstall [--purge]` | Unlink from Hammerspoon. `--purge` also deletes the model and settings. |
 | `voice-draft version` | Print the installed version. |
 
@@ -228,10 +228,24 @@ The model is preloaded when you start recording, with `keep_alive` set to
 
 ## Configuration
 
-The quickest way to change settings is the menu bar icon (🎙). It has
-pickers for the cleanup model (listed live from Ollama), cleanup mode,
-Whisper model and language, plus toggles for the live text preview, the
-overlay panel and sounds. Changes apply immediately, with no reload.
+Change settings from the menu bar icon (🎙):
+
+- **Quick pickers in the menu:** cleanup model (listed live from Ollama),
+  cleanup mode, Whisper model, language, and toggles for the live text
+  preview, the overlay panel and sounds.
+- **🎙 → Settings…** (or `voice-draft config`) opens a settings window with
+  everything else:
+  - hotkeys: click a shortcut and press a new key combination
+  - LLM timeout and word threshold
+  - vocabulary and logging options
+  - a **Pull** box to download another Ollama model
+  - a **Test cleanup** box that shows the Quick and Full cleanup of sample
+    text side by side, with timings, so you can compare models before
+    switching
+
+Changes apply immediately, including new hotkeys, with no reload. The
+settings window is a local page: it loads nothing from the network, and
+navigation away from it is blocked.
 
 Settings come from three layers, and later layers win:
 
@@ -253,8 +267,8 @@ return {
 }
 ```
 
-Open it with 🎙 → **Edit overrides.lua…**, or with `voice-draft config`.
-Reload Hammerspoon after editing it.
+Open it with 🎙 → **Edit overrides.lua…** or from the Advanced tab of the
+settings window. Reload Hammerspoon after editing it.
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -294,7 +308,8 @@ Reload Hammerspoon after editing it.
 ollama pull llama3.2:3b
 ```
 
-Then choose it under 🎙 → **Cleanup model**. Models worth comparing:
+Then choose it under 🎙 → **Cleanup model**. Or pull and compare models
+from 🎙 → **Settings…** → **Cleanup**. Models worth comparing:
 `qwen2.5:3b`, `llama3.2:3b` and `gemma3:4b`. If quality matters more than
 speed, try a 7B or 8B model; a 32 GB M-series Mac runs those comfortably.
 

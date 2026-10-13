@@ -154,6 +154,116 @@ function M.is_locked(locked, key)
 end
 
 ---------------------------------------------------------------------------
+-- Validation for values coming from the settings window
+---------------------------------------------------------------------------
+
+local VALID_MODS = { cmd = true, alt = true, ctrl = true, shift = true }
+
+local function boolean(v)
+  if type(v) == "boolean" then return true, v end
+  return false, "must be on or off"
+end
+
+local function number_in(lo, hi, integer)
+  return function(v)
+    v = tonumber(v)
+    if not v then return false, "must be a number" end
+    if integer and v ~= math.floor(v) then return false, "must be a whole number" end
+    if v < lo or v > hi then return false, string.format("must be between %s and %s", lo, hi) end
+    return true, v
+  end
+end
+
+local function hotkey(v)
+  if type(v) ~= "table" or type(v.key) ~= "string" or v.key == "" then
+    return false, "press a key combination"
+  end
+  local mods, seen = {}, {}
+  for _, m in ipairs(v.mods or {}) do
+    if not VALID_MODS[m] then return false, "unknown modifier " .. tostring(m) end
+    if not seen[m] then seen[m] = true; mods[#mods + 1] = m end
+  end
+  if #mods == 0 then return false, "needs at least one modifier (⌃ ⌥ ⇧ ⌘)" end
+  return true, { mods = mods, key = v.key:lower() }
+end
+
+M.VALIDATORS = {
+  hotkey_toggle = hotkey,
+  hotkey_cancel = hotkey,
+  ["cleanup.mode"] = function(v)
+    if v == "off" or v == "regex" or v == "llm" then return true, v end
+    return false, "must be off, regex or llm"
+  end,
+  ["cleanup.ollama.model"] = function(v)
+    if type(v) == "string" and v:find("^[%w%._:/%-]+$") then return true, v end
+    return false, "must be an Ollama model name"
+  end,
+  ["cleanup.llm_min_words"] = number_in(0, 1000, true),
+  ["cleanup.ollama.timeout_seconds"] = number_in(1, 120, false),
+  ["whisper.language"] = function(v)
+    if v == "auto" or (type(v) == "string" and v:find("^%a%a%a?$")) then return true, v:lower() end
+    return false, "must be auto or a language code such as en"
+  end,
+  ["whisper.threads"] = function(v)
+    if v == nil or v == "" or v == false then return true, nil end
+    return number_in(1, 64, true)(v)
+  end,
+  ["paths.model"] = function(v)
+    if type(v) == "string" and v:find("%.bin$") then return true, v end
+    return false, "must be a ggml .bin model file"
+  end,
+  ["recording.max_seconds"] = number_in(10, 1800, true),
+  vocabulary = function(v)
+    if type(v) ~= "table" then return false, "must be a list of terms" end
+    local out = {}
+    for _, raw in ipairs(v) do
+      if type(raw) == "string" then
+        local term = raw:gsub("^%s+", ""):gsub("%s+$", "")
+        if term ~= "" then out[#out + 1] = term end
+      end
+    end
+    if #out > 50 then return false, "keep it to 50 terms or fewer" end
+    return true, out
+  end,
+  ["ui.overlay"] = boolean,
+  ["ui.live_text"] = boolean,
+  ["ui.sounds"] = boolean,
+  ["ui.alerts"] = boolean,
+  ["insert.require_same_app"] = boolean,
+  debug = boolean,
+  log_text = boolean,
+  keep_audio = boolean,
+}
+
+-- Returns true, normalized_value  or  false, message.
+function M.validate(key, value)
+  local fn = M.VALIDATORS[key]
+  if not fn then return false, "not a setting the window can change" end
+  return fn(value)
+end
+
+-- Validate a whole form: { [dotted_key] = value }. Returns the normalized
+-- values and a table of { [key] = message } for the ones that failed.
+function M.validate_all(values)
+  local ok_values, errors = {}, {}
+  for key, value in pairs(values) do
+    local ok, result = M.validate(key, value)
+    if ok then ok_values[key] = { value = result } else errors[key] = result end
+  end
+  local t, c = ok_values.hotkey_toggle, ok_values.hotkey_cancel
+  if t and c and t.value.key == c.value.key then
+    local a, b = table.concat(t.value.mods, "+"), table.concat(c.value.mods, "+")
+    local sa, sb = {}, {}
+    for m in a:gmatch("[^+]+") do sa[m] = true end
+    for m in b:gmatch("[^+]+") do sb[m] = true end
+    local same = #t.value.mods == #c.value.mods
+    for m in pairs(sa) do same = same and sb[m] end
+    if same then errors.hotkey_cancel = "must differ from the start/stop hotkey" end
+  end
+  return ok_values, errors
+end
+
+---------------------------------------------------------------------------
 -- Loading and saving
 ---------------------------------------------------------------------------
 

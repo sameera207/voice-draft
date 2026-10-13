@@ -15,6 +15,7 @@ local ui = require("dictation.ui")
 local overlay = require("dictation.overlay")
 local live = require("dictation.live")
 local doctor = require("dictation.doctor")
+local settings_window = require("dictation.settings")
 
 local M = {}
 
@@ -291,17 +292,21 @@ end
 
 local ollama_models = nil -- cached names from /api/tags; nil until fetched
 
-local function refresh_ollama_models()
+local function refresh_ollama_models(callback)
   local url = cfg.cleanup.ollama.url
   if not cleanup.is_loopback_url(url) then return end
   hs.http.asyncGet(url .. "/api/tags", nil, function(status, body)
-    if status ~= 200 then ollama_models = nil; return end
-    local ok, data = pcall(hs.json.decode, body or "")
-    if not ok or type(data) ~= "table" then return end
-    local names = {}
-    for _, m in ipairs(data.models or {}) do names[#names + 1] = m.name end
-    table.sort(names)
-    ollama_models = names
+    ollama_models = nil
+    if status == 200 then
+      local ok, data = pcall(hs.json.decode, body or "")
+      if ok and type(data) == "table" then
+        local names = {}
+        for _, m in ipairs(data.models or {}) do names[#names + 1] = m.name end
+        table.sort(names)
+        ollama_models = names
+      end
+    end
+    if callback then callback() end
   end)
 end
 
@@ -359,6 +364,11 @@ return {
   f:close()
 end
 
+function M.open_overrides()
+  overrides_template()
+  hs.task.new("/usr/bin/open", nil, { "-t", config.override_path }):start()
+end
+
 -- A menu item bound to a setting, disabled when overrides.lua sets it.
 local function item(title, key, value, checked)
   local is_locked = config.is_locked(locked, key)
@@ -379,6 +389,25 @@ local function submenu(title, key, entries)
   local t = { title = title, menu = entries }
   if config.is_locked(locked, key) then t.title = title .. " (set in overrides.lua)" end
   return t
+end
+
+local rebind_hotkeys, suspend_hotkeys -- defined with the hotkey code below
+
+function M.open_settings_window()
+  settings_window.open({
+    cfg = function() return cfg end,
+    locked = function() return locked end,
+    set = M.set,
+    version = M.version,
+    system_prompt = function() return system_prompt end,
+    ollama_models = function() return ollama_models end,
+    refresh_ollama_models = refresh_ollama_models,
+    whisper_models = whisper_models,
+    rebind_hotkeys = function() return rebind_hotkeys() end,
+    suspend_hotkeys = function(active) suspend_hotkeys(active) end,
+    open_overrides = M.open_overrides,
+    html_path = ROOT .. "/hammerspoon/dictation/settings/index.html",
+  })
 end
 
 local function menu()
@@ -442,10 +471,7 @@ local function menu()
   if M.open_settings_window then
     items[#items + 1] = { title = "Settings…", fn = function() M.open_settings_window() end }
   end
-  items[#items + 1] = { title = "Edit overrides.lua…", fn = function()
-    overrides_template()
-    hs.task.new("/usr/bin/open", nil, { "-t", config.override_path }):start()
-  end }
+  items[#items + 1] = { title = "Edit overrides.lua…", fn = function() M.open_overrides() end }
   items[#items + 1] = { title = "Run doctor", fn = function()
     hs.openConsole()
     M.doctor()
@@ -466,9 +492,32 @@ end
 M.menu_items = menu -- for inspection from the console
 
 local function bind_hotkeys()
-  if hk_toggle then return end
-  hk_toggle = hs.hotkey.bind(cfg.hotkey_toggle.mods, cfg.hotkey_toggle.key, M.toggle)
-  hk_cancel = hs.hotkey.bind(cfg.hotkey_cancel.mods, cfg.hotkey_cancel.key, M.cancel)
+  if hk_toggle then return true end
+  local ok, err = pcall(function()
+    hk_toggle = hs.hotkey.bind(cfg.hotkey_toggle.mods, cfg.hotkey_toggle.key, M.toggle)
+    hk_cancel = hs.hotkey.bind(cfg.hotkey_cancel.mods, cfg.hotkey_cancel.key, M.cancel)
+  end)
+  if not ok then
+    if hk_toggle then hk_toggle:delete(); hk_toggle = nil end
+    return false, "couldn't bind hotkey: " .. tostring(err)
+  end
+  return true
+end
+
+-- Re-bind after a hotkey change in the settings window.
+rebind_hotkeys = function()
+  if not hs.accessibilityState(false) then return true end -- bound once granted
+  if hk_toggle then hk_toggle:delete(); hk_toggle = nil end
+  if hk_cancel then hk_cancel:delete(); hk_cancel = nil end
+  return bind_hotkeys()
+end
+
+-- While the settings window records a new shortcut, the current hotkeys
+-- must not fire (they would swallow the key press and start dictating).
+suspend_hotkeys = function(active)
+  for _, hk in ipairs({ hk_toggle, hk_cancel }) do
+    if active then hk:disable() else hk:enable() end
+  end
 end
 
 function M.start()
