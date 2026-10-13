@@ -58,6 +58,10 @@ voice-draft doctor
 While you speak, a small panel shows a live preview of the text. A
 30-second dictation is usually pasted about 4 seconds after you stop.
 
+The hotkeys work while Hammerspoon is running. It starts at login, and
+`voice-draft keepalive on` reopens it automatically if it's ever quit. Use
+`voice-draft stop` and `voice-draft start` to turn dictation off and on.
+
 ## Settings
 
 Click the 🎙 icon in the menu bar. The menu has quick switches for the

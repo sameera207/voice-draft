@@ -4,6 +4,7 @@ The details behind the [README](../README.md).
 
 - [Setup](#setup)
 - [Updates](#updates)
+- [Keeping it running](#keeping-it-running)
 - [Commands](#commands)
 - [How dictation behaves](#how-dictation-behaves)
 - [Cleanup](#cleanup)
@@ -59,6 +60,21 @@ installs a macOS LaunchAgent that runs `voice-draft update` once a day at
 Hammerspoon, so the dictation tool itself still only talks to Ollama on
 localhost.
 
+## Keeping it running
+
+The hotkeys are registered by Hammerspoon, so they only work while it's
+running. Hammerspoon starts at login. If you quit it, ⌃⌥D does nothing
+until it's open again.
+
+`voice-draft keepalive on` installs a small LaunchAgent
+(`com.sameera207.voice-draft.keepalive`) that checks every 2 seconds and
+reopens Hammerspoon with `open -g -a Hammerspoon` if it isn't running. It
+never starts a second copy, and your Accessibility and Microphone
+permissions stay attached to the app. To really turn dictation off, use
+`voice-draft stop`. It quits Hammerspoon and pauses keep-alive until
+`voice-draft start` or your next login. `voice-draft keepalive off` removes
+the job.
+
 ## Commands
 
 | Command | What it does |
@@ -68,6 +84,8 @@ localhost.
 | `voice-draft update [--quiet]` | Upgrade and reload. |
 | `voice-draft autoupdate on\|off\|status` | Manage daily automatic updates. |
 | `voice-draft models [list\|download\|remove]` | List, download or delete Whisper models. |
+| `voice-draft keepalive on\|off\|status` | Reopen Hammerspoon within a couple of seconds if it quits. Off by default. |
+| `voice-draft start` / `stop` | Open or quit Hammerspoon. `stop` pauses keep-alive until `start` or your next login. |
 | `voice-draft config` | Open the settings window. |
 | `voice-draft uninstall [--purge]` | Unlink from Hammerspoon. `--purge` also deletes the model and settings. |
 | `voice-draft version` | Print the installed version. |

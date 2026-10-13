@@ -6,6 +6,8 @@
 #   voice-draft update [--quiet]   upgrade to the latest release and reload
 #   voice-draft autoupdate on|off|status
 #   voice-draft models [list|download <model>|remove <model>]
+#   voice-draft keepalive on|off|status   reopen Hammerspoon if it quits
+#   voice-draft start | stop       start or quit Hammerspoon (and keep-alive)
 #   voice-draft config             open settings
 #   voice-draft uninstall [--purge]
 #   voice-draft version [--verbose]
@@ -27,6 +29,8 @@ HS_LINK="$HS_DIR/dictation"
 OLLAMA_URL="http://localhost:11434"
 AGENT_LABEL="com.sameera207.voice-draft.autoupdate"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
+KEEPALIVE_LABEL="com.sameera207.voice-draft.keepalive"
+KEEPALIVE_PLIST="$HOME/Library/LaunchAgents/$KEEPALIVE_LABEL.plist"
 UPDATE_LOG="$HOME/Library/Logs/voice-draft-update.log"
 
 QUIET=0
@@ -350,7 +354,8 @@ Done. Next steps:
   1. Grant Hammerspoon Accessibility and Microphone access in
      System Settings > Privacy & Security.
   2. Press Ctrl+Option+D to start dictating, and again to stop.
-  3. Optional: 'voice-draft autoupdate on' to install updates automatically.
+  3. Optional: 'voice-draft autoupdate on' to install updates automatically,
+     and 'voice-draft keepalive on' to reopen Hammerspoon if it's quit.
 EOF
 }
 
@@ -530,6 +535,108 @@ cmd_autoupdate() {
 }
 
 ###########################################################################
+# keepalive / start / stop
+###########################################################################
+
+# The hotkeys live in Hammerspoon, so they only work while it runs. The
+# keep-alive job checks every 2 s and reopens it with `open`, which never
+# starts a second copy and keeps macOS permissions attached to the app.
+write_keepalive_plist() {
+  mkdir -p "$(dirname "$KEEPALIVE_PLIST")"
+  cat > "$KEEPALIVE_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$KEEPALIVE_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>while :; do /usr/bin/pgrep -xq Hammerspoon || /usr/bin/open -g -a Hammerspoon; sleep 2; done</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>/dev/null</string>
+</dict>
+</plist>
+PLIST
+}
+
+keepalive_loaded() { launchctl print "gui/$(id -u)/$KEEPALIVE_LABEL" >/dev/null 2>&1; }
+keepalive_load() { keepalive_loaded || launchctl bootstrap "gui/$(id -u)" "$KEEPALIVE_PLIST"; }
+keepalive_unload() { if keepalive_loaded; then launchctl bootout "gui/$(id -u)/$KEEPALIVE_LABEL" 2>/dev/null || true; fi; }
+
+cmd_keepalive() {
+  case "${1:-status}" in
+    on)
+      keepalive_unload
+      write_keepalive_plist
+      keepalive_load
+      echo "Keep-alive is on: Hammerspoon is reopened within a few seconds if it quits."
+      echo "To quit it for real: voice-draft stop"
+      ;;
+    off)
+      keepalive_unload
+      rm -f "$KEEPALIVE_PLIST"
+      echo "Keep-alive is off."
+      ;;
+    status)
+      if keepalive_loaded; then
+        echo "Keep-alive is on."
+      elif [[ -f "$KEEPALIVE_PLIST" ]]; then
+        echo "Keep-alive is paused (voice-draft stop). 'voice-draft start' resumes it."
+      else
+        echo "Keep-alive is off. Turn it on with: voice-draft keepalive on"
+      fi
+      ;;
+    *) die "usage: voice-draft keepalive on|off|status" ;;
+  esac
+}
+
+cmd_start() {
+  if [[ -f "$KEEPALIVE_PLIST" ]]; then
+    keepalive_load
+  fi
+  if hammerspoon_running; then
+    echo "Hammerspoon is already running. Dictate with Ctrl+Option+D."
+  else
+    open -g -a Hammerspoon
+    echo "Started Hammerspoon. Dictate with Ctrl+Option+D."
+  fi
+  if [[ -f "$KEEPALIVE_PLIST" ]]; then echo "Keep-alive is on."; fi
+  return 0
+}
+
+# Quit Hammerspoon. Keep-alive is paused (not removed) so it doesn't reopen
+# it; 'start' resumes it, and so does the next login.
+cmd_stop() {
+  local paused=0
+  if keepalive_loaded; then
+    keepalive_unload
+    paused=1
+  fi
+  if hammerspoon_running; then
+    osascript -e 'tell application "Hammerspoon" to quit' >/dev/null 2>&1 || pkill -x Hammerspoon || true
+    local _
+    for _ in $(seq 1 20); do hammerspoon_running || break; sleep 0.25; done
+  fi
+  echo "Stopped Hammerspoon. Ctrl+Option+D is off until 'voice-draft start'."
+  if [[ $paused -eq 1 ]]; then
+    echo "Keep-alive is paused; 'voice-draft start' or your next login resumes it."
+  fi
+  return 0
+}
+
+###########################################################################
 # config
 ###########################################################################
 
@@ -562,8 +669,9 @@ cmd_uninstall() {
   local purge=0
   [[ "${1:-}" == "--purge" ]] && purge=1
 
-  step "Removing auto-update job"
+  step "Removing auto-update and keep-alive jobs"
   cmd_autoupdate off >/dev/null
+  cmd_keepalive off >/dev/null
   ok "done"
 
   step "Unlinking from Hammerspoon"
@@ -605,7 +713,7 @@ cmd_uninstall() {
 ###########################################################################
 
 usage() {
-  sed -n '2,11p' "$SELF" | sed 's/^# \{0,1\}//'
+  sed -n '2,13p' "$SELF" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -617,6 +725,9 @@ main() {
     update)     cmd_update "$@" ;;
     autoupdate) cmd_autoupdate "$@" ;;
     models)     cmd_models "$@" ;;
+    keepalive)  cmd_keepalive "$@" ;;
+    start)      cmd_start "$@" ;;
+    stop)       cmd_stop "$@" ;;
     config)     cmd_config "$@" ;;
     uninstall)  cmd_uninstall "$@" ;;
     version|--version|-v)
@@ -626,6 +737,9 @@ main() {
         echo "  hammerspoon code: $(code_dir)"
         echo "  linked: $(readlink "$HS_LINK" 2>/dev/null || echo "not linked")"
         echo "  autoupdate: $(agent_loaded && echo on || echo off)"
+        local ka=off
+        if keepalive_loaded; then ka=on; elif [[ -f "$KEEPALIVE_PLIST" ]]; then ka=paused; fi
+        echo "  keepalive: $ka"
       fi
       ;;
     help|--help|-h) usage ;;
