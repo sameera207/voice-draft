@@ -303,7 +303,10 @@ cmd_update() {
   case "$kind" in
     brew)
       "$BREW" update --quiet >/dev/null 2>&1 || warn "brew update failed"
-      if "$BREW" outdated --quiet "$TAP_FORMULA" | grep -q .; then
+      # `brew outdated` exits 1 when something IS outdated, so test its output.
+      local outdated
+      outdated="$("$BREW" outdated --quiet "$TAP_FORMULA" 2>/dev/null || true)"
+      if [[ -n "$outdated" ]]; then
         step "Upgrading voice-draft"
         "$BREW" upgrade "$TAP_FORMULA"
         changed=1
