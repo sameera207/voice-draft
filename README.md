@@ -6,7 +6,7 @@ Desktop or a terminal. It's never sent, so you can review it first.
 
 Everything runs on your Mac. No accounts, no cloud.
 
-<img src="docs/images/overlay.png" width="560" alt="The floating panel while recording: a red dot, the elapsed time, a level meter and the live transcript">
+<img src="docs/images/recording.gif" width="680" alt="Recording: the floating panel shows a red dot, the elapsed time, a level meter and the text appearing live as you speak">
 
 ## How it works
 
@@ -64,7 +64,10 @@ Click the 🎙 icon in the menu bar. The menu has quick switches for the
 cleanup model, cleanup mode and speech model. **Settings…** opens the
 window below; `voice-draft config` opens it from the terminal.
 
-<img src="docs/images/settings.png" width="560" alt="The settings window on the Cleanup tab, with the model picker and a Test cleanup result">
+<p>
+  <img src="docs/images/settings-general.png" width="49%" alt="Settings window, General tab: hotkeys and on-screen feedback">
+  <img src="docs/images/settings-advanced.png" width="49%" alt="Settings window, Advanced tab: pasting, logging and overrides">
+</p>
 
 | Tab | What you can change |
 | --- | --- |
