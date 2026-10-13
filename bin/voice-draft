@@ -5,6 +5,7 @@
 #   voice-draft doctor             check dependencies and permissions
 #   voice-draft update [--quiet]   upgrade to the latest release and reload
 #   voice-draft autoupdate on|off|status
+#   voice-draft models [list|download <model>|remove <model>]
 #   voice-draft config             open settings
 #   voice-draft uninstall [--purge]
 #   voice-draft version [--verbose]
@@ -107,13 +108,142 @@ ollama_has() {
 }
 
 ###########################################################################
+# Whisper models (catalog: whisper-models.tsv, checksums pinned)
+###########################################################################
+
+CATALOG="$ROOT/whisper-models.tsv"
+HF_BASE="https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+
+catalog_field() { # file column
+  awk -F'\t' -v f="$1" -v n="$2" '!/^#/ && $1 == f { print $n }' "$CATALOG" 2>/dev/null
+}
+
+# Accept "small.en", "ggml-small.en", or "ggml-small.en.bin".
+model_file() {
+  local name="$1"
+  name="${name#ggml-}"
+  name="${name%.bin}"
+  local file="ggml-$name.bin"
+  [[ "$file" =~ ^ggml-[A-Za-z0-9._-]+\.bin$ && "$file" != *..* ]] || return 1
+  printf '%s' "$file"
+}
+
+human_size() { awk -v b="$1" 'BEGIN { if (b >= 1e9) printf "%.1f GB", b/1e9; else printf "%.0f MB", b/1e6 }'; }
+
+# Download a model into MODEL_DIR: resumable, aborts stalled transfers, and
+# verifies the pinned sha256 (or the published one for models not in the
+# catalog). Interrupting it also stops curl.
+download_model() {
+  local file="$1"
+  local path="$MODEL_DIR/$file"
+  mkdir -p "$MODEL_DIR"
+  if [[ -s "$path" ]]; then
+    ok "already present: $path"
+    return 0
+  fi
+  local expected
+  expected="$(catalog_field "$file" 3)"
+  if [[ -z "$expected" ]] && command -v python3 >/dev/null 2>&1; then
+    expected="$(curl -s --fail "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main" | python3 -c '
+import json, sys
+for f in json.load(sys.stdin):
+    if f.get("path") == sys.argv[1] and f.get("lfs"):
+        print(f["lfs"].get("oid", ""))
+' "$file" 2>/dev/null || true)"
+  fi
+
+  local progress=(-s -S)
+  [[ -t 2 && $QUIET -eq 0 ]] && progress=(-#)
+  local attempt cpid rc
+  for attempt in 1 2 3 4 5; do
+    # Abort a stalled transfer (<10 KB/s for 60 s) and resume.
+    curl -L --fail --retry 3 --speed-limit 10240 --speed-time 60 "${progress[@]}" \
+      -C - -o "$path.part" "$HF_BASE/$file" &
+    cpid=$!
+    trap 'kill "$cpid" 2>/dev/null; exit 143' TERM INT
+    rc=0
+    wait "$cpid" || rc=$?
+    trap - TERM INT
+    [[ $rc -eq 0 ]] && break
+    if [[ $attempt -eq 5 ]]; then
+      warn "download of $file failed (curl exit $rc)"
+      return 1
+    fi
+    warn "download interrupted, resuming (attempt $((attempt + 1)) of 5)"
+    sleep 2
+  done
+
+  if [[ -n "$expected" ]]; then
+    local actual
+    actual="$(shasum -a 256 "$path.part" | awk '{print $1}')"
+    if [[ "$actual" != "$expected" ]]; then
+      rm -f "$path.part"
+      warn "checksum mismatch for $file (expected $expected, got $actual); download discarded"
+      return 1
+    fi
+    ok "sha256 verified"
+  else
+    warn "no published checksum for $file; skipping verification"
+  fi
+  mv "$path.part" "$path"
+  ok "saved to $path"
+}
+
+cmd_models() {
+  local sub="${1:-list}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    list)
+      printf '%-24s %-9s %-10s %s\n' MODEL SIZE STATUS NOTE
+      local file bytes _sha _label note short status
+      while IFS=$'\t' read -r file bytes _sha _label note; do
+        [[ -z "$file" || "$file" == \#* ]] && continue
+        short="${file#ggml-}"; short="${short%.bin}"
+        status="-"
+        [[ -s "$MODEL_DIR/$file" ]] && status="installed"
+        [[ -s "$MODEL_DIR/$file.part" ]] && status="partial"
+        printf '%-24s %-9s %-10s %s\n' "$short" "$(human_size "$bytes")" "$status" "$note"
+      done < "$CATALOG"
+      local f
+      for f in "$MODEL_DIR"/ggml-*.bin; do
+        [[ -e "$f" ]] || continue
+        file="$(basename "$f")"
+        [[ -n "$(catalog_field "$file" 1)" ]] && continue
+        short="${file#ggml-}"; short="${short%.bin}"
+        printf '%-24s %-9s %-10s %s\n' "$short" "$(human_size "$(stat -f %z "$f")")" installed "Added by hand."
+      done
+      echo
+      echo "Download: voice-draft models download <model>   Select it in 🎙 → Settings… → Transcription."
+      ;;
+    download)
+      [[ -n "${1:-}" ]] || die "usage: voice-draft models download <model>"
+      local file
+      file="$(model_file "$1")" || die "invalid model name: $1"
+      if [[ -z "$(catalog_field "$file" 1)" ]]; then
+        warn "$file isn't in the catalog; trying Hugging Face anyway"
+      fi
+      step "Downloading $file"
+      download_model "$file"
+      ;;
+    remove)
+      [[ -n "${1:-}" ]] || die "usage: voice-draft models remove <model>"
+      local file
+      file="$(model_file "$1")" || die "invalid model name: $1"
+      [[ -e "$MODEL_DIR/$file" || -e "$MODEL_DIR/$file.part" ]] || die "$file is not installed"
+      rm -f "$MODEL_DIR/$file" "$MODEL_DIR/$file.part"
+      echo "Removed $file. If it was selected, pick another model in Settings."
+      ;;
+    *) die "usage: voice-draft models list|download <model>|remove <model>" ;;
+  esac
+}
+
+###########################################################################
 # setup
 ###########################################################################
 
 cmd_setup() {
-  local whisper_model="${WHISPER_MODEL:-ggml-large-v3-turbo.bin}"
-  local whisper_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$whisper_model"
-  local whisper_api="https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main"
+  local whisper_model
+  whisper_model="$(model_file "${WHISPER_MODEL:-large-v3-turbo}")" || die "unknown Whisper model: $WHISPER_MODEL"
   local ollama_model="${OLLAMA_MODEL:-qwen2.5:3b}"
 
   [[ $EUID -ne 0 ]] || die "do not run as root"
@@ -151,47 +281,10 @@ cmd_setup() {
   fi
 
   step "Downloading Whisper model ($whisper_model)"
-  mkdir -p "$MODEL_DIR"
-  local model_path="$MODEL_DIR/$whisper_model"
   if [[ -n "${SKIP_WHISPER_MODEL:-}" ]]; then
     ok "skipped (SKIP_WHISPER_MODEL set)"
-  elif [[ -s "$model_path" ]]; then
-    ok "already present: $model_path"
   else
-    # Resumable download to a .part file, then verify and move into place.
-    # Abort a stalled transfer (<10 KB/s for 60 s) and resume, up to 5 times.
-    local attempt
-    for attempt in 1 2 3 4 5; do
-      if curl -L --fail --retry 3 --speed-limit 10240 --speed-time 60 \
-           -C - -o "$model_path.part" "$whisper_url"; then
-        break
-      fi
-      [[ $attempt -eq 5 ]] && die "download failed; re-run 'voice-draft setup' to resume"
-      warn "download interrupted, resuming (attempt $((attempt + 1)) of 5)"
-      sleep 2
-    done
-    local expected="" actual
-    if command -v python3 >/dev/null 2>&1; then
-      expected="$(curl -s --fail "$whisper_api" | python3 -c '
-import json, sys
-name = sys.argv[1]
-for f in json.load(sys.stdin):
-    if f.get("path") == name and f.get("lfs"):
-        print(f["lfs"].get("oid", ""))
-' "$whisper_model" 2>/dev/null || true)"
-    fi
-    if [[ -n "$expected" ]]; then
-      actual="$(shasum -a 256 "$model_path.part" | awk '{print $1}')"
-      if [[ "$actual" != "$expected" ]]; then
-        rm -f "$model_path.part"
-        die "checksum mismatch for $whisper_model (expected $expected, got $actual)"
-      fi
-      ok "sha256 verified"
-    else
-      warn "could not fetch published checksum; skipping verification"
-    fi
-    mv "$model_path.part" "$model_path"
-    ok "saved to $model_path"
+    download_model "$whisper_model" || die "download failed; re-run 'voice-draft setup' to resume"
   fi
 
   step "Starting Ollama"
@@ -512,7 +605,7 @@ cmd_uninstall() {
 ###########################################################################
 
 usage() {
-  sed -n '2,10p' "$SELF" | sed 's/^# \{0,1\}//'
+  sed -n '2,11p' "$SELF" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -523,6 +616,7 @@ main() {
     doctor)     cmd_doctor "$@" ;;
     update)     cmd_update "$@" ;;
     autoupdate) cmd_autoupdate "$@" ;;
+    models)     cmd_models "$@" ;;
     config)     cmd_config "$@" ;;
     uninstall)  cmd_uninstall "$@" ;;
     version|--version|-v)

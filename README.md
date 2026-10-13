@@ -87,7 +87,7 @@ Setup options are set with environment variables:
 | Variable | Effect |
 | --- | --- |
 | `OLLAMA_MODEL=llama3.2:3b` | Pull a different cleanup model, then choose it in the menu. |
-| `WHISPER_MODEL=ggml-large-v3-turbo-q5_0.bin` | Download a quantized Whisper model instead (about 0.6 GB). |
+| `WHISPER_MODEL=large-v3-turbo-q5_0` | Download a different Whisper model instead (see [Whisper models](#whisper-models)). |
 | `SKIP_WHISPER_MODEL=1` | Skip the Whisper download. |
 
 ### Install from source
@@ -129,6 +129,7 @@ localhost.
 | `voice-draft doctor` | Check dependencies and permissions. |
 | `voice-draft update [--quiet]` | Upgrade and reload. |
 | `voice-draft autoupdate on\|off\|status` | Manage daily automatic updates. |
+| `voice-draft models [list\|download\|remove]` | List, download or delete Whisper models. |
 | `voice-draft config` | Open the settings window. |
 | `voice-draft uninstall [--purge]` | Unlink from Hammerspoon. `--purge` also deletes the model and settings. |
 | `voice-draft version` | Print the installed version. |
@@ -301,6 +302,37 @@ settings window. Reload Hammerspoon after editing it.
 | `debug` | `false` | Logs timings and errors to `~/Library/Logs/voice-draft.log`. |
 | `log_text` | `false` | With `debug`, also logs transcripts. |
 | `keep_audio` | `false` | Keeps the temp WAV after transcription. |
+
+### Whisper models
+
+Pick the speech-to-text model in 🎙 → **Settings…** → **Transcription**, or
+via 🎙 → **Whisper model** → **More models…**. Click **Download** next to a
+model, select it once it's downloaded, then **Save**. Downloads can be
+cancelled and resumed later. Models you aren't using can be deleted.
+
+| Model | Size | Notes |
+| --- | --- | --- |
+| `large-v3-turbo` | 1.6 GB | Best accuracy, all languages. The default. |
+| `large-v3-turbo-q8_0` | 874 MB | Nearly the same accuracy at half the size. |
+| `large-v3-turbo-q5_0` | 574 MB | Slightly less accurate, a third of the size. |
+| `medium.en` | 1.5 GB | Good accuracy, English only. Slower than turbo. |
+| `small.en` / `small` | 488 MB | Faster. `.en` models are English only. |
+| `base.en` | 148 MB | Very fast, noticeably less accurate. |
+| `tiny.en` | 78 MB | Fastest, mostly for testing. |
+
+The same works from the terminal:
+
+```sh
+voice-draft models                      # list, with what's installed
+voice-draft models download small.en
+voice-draft models remove small.en
+```
+
+Models download from the whisper.cpp repository on Hugging Face into
+`~/.local/share/voice-draft/models/`. Each one is checked against a SHA-256
+pinned in `whisper-models.tsv`, and a download that doesn't match is
+discarded. The download runs in the `voice-draft` command (using `curl`), not
+inside Hammerspoon.
 
 ### Changing the cleanup model
 

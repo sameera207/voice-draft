@@ -6,6 +6,7 @@
 local config = require("dictation.config")
 local cleanup = require("dictation.cleanup")
 local doctor = require("dictation.doctor")
+local models = require("dictation.models")
 
 local M = {}
 
@@ -13,6 +14,7 @@ local W, H = 720, 620
 
 local webview, usercontent = nil, nil
 local pull_task = nil
+local download = nil -- active Whisper download: { file, task, timer, total }
 local ctx = nil -- provided by init.lua (see M.open)
 
 -- Settings the window shows, as dotted keys.
@@ -32,6 +34,31 @@ local function send(payload)
   if ok then webview:evaluateJavaScript("vd.receive(" .. json .. ")") end
 end
 
+local function models_dir()
+  return ctx.cfg().paths.model:match("^(.*)/[^/]*$")
+end
+
+local function whisper_entries()
+  local f = io.open(ctx.root .. "/whisper-models.tsv", "r")
+  local catalog = f and models.parse_catalog(f:read("*a")) or {}
+  if f then f:close() end
+  local dir = models_dir()
+  local on_disk, partial = {}, {}
+  local ok, iter, obj = pcall(hs.fs.dir, dir)
+  if ok and iter then
+    for name in iter, obj do
+      if models.valid_file(name) then
+        on_disk[name] = hs.fs.attributes(dir .. "/" .. name, "size")
+      elseif name:match("%.bin%.part$") then
+        partial[name:gsub("%.part$", "")] = hs.fs.attributes(dir .. "/" .. name, "size")
+      end
+    end
+  end
+  local list = models.entries(catalog, dir, on_disk, ctx.cfg().paths.model)
+  for _, e in ipairs(list) do e.partial_bytes = partial[e.file] end
+  return list, dir
+end
+
 local function state_payload()
   local cfg = ctx.cfg()
   local values, locked = {}, {}
@@ -41,10 +68,7 @@ local function state_payload()
     values[key] = v
     if config.is_locked(ctx.locked(), key) then locked[#locked + 1] = key end
   end
-  local whisper = {}
-  for _, path in ipairs(ctx.whisper_models()) do
-    whisper[#whisper + 1] = { path = path, name = path:match("ggml%-(.+)%.bin$") or path }
-  end
+  local whisper, dir = whisper_entries()
   return {
     type = "state",
     version = ctx.version,
@@ -53,6 +77,8 @@ local function state_payload()
     ollama_models = ctx.ollama_models() or {},
     ollama_up = ctx.ollama_models() ~= nil,
     whisper_models = whisper,
+    models_dir = dir,
+    downloading = download and { file = download.file } or nil,
     overrides_path = config.override_path,
   }
 end
@@ -149,6 +175,70 @@ local function handle_pull(model)
   send({ type = "pull", model = model, percent = 0 })
 end
 
+-- Whisper downloads run in `voice-draft models download` (curl, checksum
+-- pinned), not in Hammerspoon. Progress comes from the .part file size.
+local function handle_whisper_download(file)
+  if not models.valid_file(file) then return end
+  if download then
+    return send({ type = "whisper_done", file = file, ok = false, message = "Another download is running" })
+  end
+  local total
+  for _, e in ipairs((whisper_entries())) do
+    if e.file == file then total = e.bytes end
+  end
+  local dir = models_dir()
+  local dl = { file = file, total = total }
+  dl.task = hs.task.new(ctx.root .. "/bin/voice-draft", function(code, stdout, stderr)
+    if download == dl then download = nil end
+    if dl.timer then dl.timer:stop() end
+    local text = ((stdout or "") .. "\n" .. (stderr or "")):gsub("\27%[[%d;?]*%a", "")
+    local message
+    for line in text:gmatch("[^\r\n]+") do
+      if line:find("warning:") or line:find("error:") then message = line:gsub("^%s*", "") end
+    end
+    local ok = code == 0
+    if dl.cancelled then
+      message = "Download paused. Click Resume to continue."
+    elseif ok then
+      message = "Downloaded and verified."
+    end
+    send({ type = "whisper_done", file = file, ok = ok and not dl.cancelled,
+           message = message or ("Download failed (exit " .. code .. ")") })
+    send(state_payload())
+  end, { "models", "download", file })
+  if not dl.task or not dl.task:start() then
+    return send({ type = "whisper_done", file = file, ok = false, message = "Couldn't start the download" })
+  end
+  download = dl
+  dl.timer = hs.timer.doEvery(0.5, function()
+    local bytes = hs.fs.attributes(dir .. "/" .. file .. ".part", "size")
+      or hs.fs.attributes(dir .. "/" .. file, "size") or 0
+    send({ type = "whisper_progress", file = file, bytes = bytes, total = dl.total })
+  end)
+  send(state_payload())
+end
+
+local function handle_whisper_cancel()
+  if download and download.task and download.task:isRunning() then
+    download.cancelled = true
+    download.task:terminate() -- the CLI stops curl; the .part file is kept
+  end
+end
+
+local function handle_whisper_delete(file)
+  if not models.valid_file(file) then return end
+  local dir = models_dir()
+  local path = dir .. "/" .. file
+  if path == ctx.cfg().paths.model then
+    return send({ type = "whisper_done", file = file, ok = false, message = "That model is in use. Select another one and save first." })
+  end
+  if download and download.file == file then handle_whisper_cancel() end
+  os.remove(path)
+  os.remove(path .. ".part")
+  send({ type = "whisper_done", file = file, ok = true, message = "Deleted." })
+  send(state_payload())
+end
+
 local function on_message(msg)
   local body = msg.body
   if type(body) ~= "table" then return end
@@ -162,6 +252,12 @@ local function on_message(msg)
     handle_test(body)
   elseif action == "pull" then
     handle_pull(body.model)
+  elseif action == "whisper_download" then
+    handle_whisper_download(body.file)
+  elseif action == "whisper_cancel" then
+    handle_whisper_cancel()
+  elseif action == "whisper_delete" then
+    handle_whisper_delete(body.file)
   elseif action == "suspend_hotkeys" then
     ctx.suspend_hotkeys(body.active == true)
   elseif action == "open_overrides" then
@@ -174,11 +270,12 @@ end
 -- ctx: { cfg(), locked(), set(key, value), version, system_prompt(),
 --        ollama_models(), refresh_ollama_models(cb), whisper_models(),
 --        rebind_hotkeys() -> ok, err, suspend_hotkeys(bool),
---        open_overrides(), html_path }
-function M.open(context)
+--        open_overrides(), html_path, root }
+function M.open(context, tab)
   ctx = context
   if webview then
     webview:show():bringToFront(true)
+    if tab then webview:evaluateJavaScript("vd.showTab(" .. hs.json.encode({ tab }):sub(2, -2) .. ")") end
     return
   end
   usercontent = hs.webview.usercontent.new("voicedraft")
@@ -205,7 +302,7 @@ function M.open(context)
       ctx.suspend_hotkeys(false) -- in case the window closed mid-recording
     end
   end)
-  webview:url("file://" .. ctx.html_path)
+  webview:url("file://" .. ctx.html_path .. (tab and ("#" .. tab) or ""))
   webview:show()
   webview:bringToFront(true)
 end

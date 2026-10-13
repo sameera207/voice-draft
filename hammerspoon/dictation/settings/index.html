@@ -93,6 +93,22 @@
   .test-out .time { float: right; font-weight: 400; text-transform: none; letter-spacing: 0; }
   .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
   code { background: var(--code); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font: 12px ui-monospace, Menlo, monospace; -webkit-user-select: text; user-select: text; }
+  .models { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .model {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--field);
+  }
+  .model.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .model input[type=radio] { margin: 0; accent-color: var(--accent); }
+  .model .name { font-weight: 600; }
+  .model .size { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .model .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-left: 6px; font-weight: 400; }
+  .model .note { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .model .actions { grid-row: 1 / 3; grid-column: 3; display: flex; align-items: center; gap: 8px; }
+  .model .actions .state { color: var(--muted); font-size: 12px; }
+  .model progress { width: 110px; }
+  .model .msg { grid-column: 2 / 4; font-size: 12px; color: var(--muted); }
+  .model .msg.bad { color: var(--error); }
   footer {
     display: flex; align-items: center; gap: 8px; padding: 10px 26px;
     border-top: 1px solid var(--border); background: var(--bg);
@@ -215,10 +231,12 @@
     <p class="lede">Speech-to-text with whisper.cpp.</p>
     <div class="group">
       <h2>Whisper</h2>
-      <div class="row" data-row="paths.model">
+      <div class="row stack" data-row="paths.model">
         <label class="title">Model</label>
-        <select data-key="paths.model" data-type="select"></select>
-        <span class="hint">Files in <code id="models-dir"></code>. Download others with <code>WHISPER_MODEL=… voice-draft setup</code>.</span>
+        <div class="models" data-key="paths.model" data-type="model-list"></div>
+        <span class="hint">Bigger models are more accurate but slower. Downloads come from the whisper.cpp
+          repository on Hugging Face, are checked against pinned checksums, and are saved in <code id="models-dir"></code>.
+          Select a downloaded model, then Save.</span>
       </div>
       <div class="row" data-row="whisper.language">
         <label class="title">Language</label>
@@ -226,6 +244,7 @@
           <option value="en">English</option>
           <option value="auto">Auto-detect</option>
         </select>
+        <span class="hint" id="lang-hint" hidden>The selected model only understands English, so this has no effect. Choose a model without "English only" for other languages.</span>
       </div>
       <div class="row" data-row="whisper.threads">
         <label class="title">CPU threads</label>
@@ -297,10 +316,14 @@
   let recording = null;     // hotkey button being recorded
 
   // ---------- tabs ----------
-  $$("nav [role=tab]").forEach((b) => b.addEventListener("click", () => {
+  function showTab(name) {
+    const b = $(`nav [data-tab="${CSS.escape(name)}"]`);
+    if (!b) return;
     $$("nav [role=tab]").forEach((x) => x.setAttribute("aria-selected", x === b));
-    $$("section[data-panel]").forEach((p) => p.hidden = p.dataset.panel !== b.dataset.tab);
-  }));
+    $$("section[data-panel]").forEach((p) => p.hidden = p.dataset.panel !== name);
+  }
+  $$("nav [role=tab]").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  if (location.hash) showTab(location.hash.slice(1));
 
   // ---------- hotkeys ----------
   const MOD_SYMBOL = { ctrl: "⌃", alt: "⌥", shift: "⇧", cmd: "⌘" };
@@ -389,10 +412,8 @@
       ? `${state.ollama_models.length} model${state.ollama_models.length === 1 ? "" : "s"} installed in Ollama.`
       : "Ollama isn't reachable. Start it with: ollama serve";
 
-    setOptions($("[data-key='paths.model']"),
-      state.whisper_models.map((m) => ({ value: m.path, label: m.name })), v["paths.model"]);
-    const dir = (v["paths.model"] || "").replace(/\/[^/]*$/, "").replace(/^\/Users\/[^/]+/, "~");
-    $("#models-dir").textContent = dir;
+    renderModels();
+    $("#models-dir").textContent = (state.models_dir || "").replace(/^\/Users\/[^/]+/, "~");
 
     const lang = $("[data-key='whisper.language']");
     if (![...lang.options].some((o) => o.value === v["whisper.language"])) {
@@ -407,6 +428,7 @@
       else if (type === "radio") $$("input", el).forEach((r) => r.checked = r.value === val);
       else if (type === "list") el.value = (val || []).join("\n");
       else if (type === "hotkey") el.textContent = hotkeyLabel(val);
+      else if (type === "model-list") return; // rendered by renderModels()
       else el.value = val === "" || val == null ? "" : val;
     });
 
@@ -414,7 +436,9 @@
     $$("[data-row]").forEach((row) => {
       const key = row.dataset.row;
       const isLocked = state.locked.includes(key);
-      row.querySelectorAll("[data-key], [data-key] input").forEach((el) => el.disabled = isLocked);
+      // (the Whisper model list manages its own disabled state)
+      row.querySelectorAll("[data-key]:not([data-type=model-list]), [data-key]:not([data-type=model-list]) input")
+        .forEach((el) => el.disabled = isLocked);
       let lock = row.querySelector(".lock");
       if (isLocked && !lock) {
         lock = document.createElement("span"); lock.className = "lock";
@@ -424,8 +448,87 @@
     dependents();
   }
 
+  // ---------- Whisper model list ----------
+  const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
+  const modelMsgs = {};   // file -> { text, bad }
+  let dlProgress = null;  // { file, bytes, total }
+  let confirmDelete = null;
+
+  function renderModels() {
+    const box = $("[data-type=model-list]");
+    const locked = state.locked.includes("paths.model");
+    const savedPath = state.values["paths.model"];
+    const downloading = state.downloading && state.downloading.file;
+    box.innerHTML = "";
+    for (const m of state.whisper_models) {
+      const row = document.createElement("label");
+      row.className = "model" + (form["paths.model"] === m.path ? " selected" : "");
+      const radio = document.createElement("input");
+      radio.type = "radio"; radio.name = "whisper-model"; radio.value = m.path;
+      radio.checked = form["paths.model"] === m.path;
+      radio.disabled = locked || !m.installed;
+      radio.addEventListener("change", () => { changed(); renderModels(); });
+      row.appendChild(radio);
+
+      const name = document.createElement("div");
+      name.innerHTML = `<span class="name"></span><span class="size"></span>`;
+      name.querySelector(".name").textContent = m.label;
+      name.querySelector(".size").textContent = m.bytes ? fmtSize(m.bytes) : "";
+      if (m.english_only) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "English only"; name.appendChild(t); }
+      if (m.path === savedPath) { const t = document.createElement("span"); t.className = "tag"; t.textContent = "In use"; name.appendChild(t); }
+      row.appendChild(name);
+
+      const actions = document.createElement("div"); actions.className = "actions";
+      const btn = (label, action) => {
+        const b = document.createElement("button"); b.className = "btn"; b.textContent = label;
+        b.addEventListener("click", (e) => { e.preventDefault(); action(); });
+        actions.appendChild(b); return b;
+      };
+      if (downloading === m.file) {
+        const p = document.createElement("progress"); p.max = 100;
+        const st = document.createElement("span"); st.className = "state";
+        if (dlProgress && dlProgress.file === m.file && dlProgress.total) {
+          p.value = Math.min(100, 100 * dlProgress.bytes / dlProgress.total);
+          st.textContent = `${fmtSize(dlProgress.bytes)} of ${fmtSize(dlProgress.total)}`;
+        }
+        actions.append(p, st);
+        btn("Cancel", () => post({ action: "whisper_cancel" }));
+      } else if (!m.installed) {
+        const b = btn(m.partial_bytes ? "Resume" : "Download", () => {
+          modelMsgs[m.file] = null;
+          post({ action: "whisper_download", file: m.file });
+        });
+        b.disabled = !!downloading;
+        if (m.partial_bytes) {
+          const st = document.createElement("span"); st.className = "state";
+          st.textContent = `${fmtSize(m.partial_bytes)} so far`; actions.prepend(st);
+        }
+      } else if (m.path !== savedPath) {
+        const confirming = confirmDelete === m.file;
+        btn(confirming ? "Confirm delete" : "Delete", () => {
+          if (confirming) { confirmDelete = null; post({ action: "whisper_delete", file: m.file }); }
+          else { confirmDelete = m.file; renderModels(); setTimeout(() => { if (confirmDelete === m.file) { confirmDelete = null; renderModels(); } }, 4000); }
+        });
+      }
+      row.appendChild(actions);
+
+      const note = document.createElement("div"); note.className = "note"; note.textContent = m.note;
+      row.appendChild(note);
+      const msg = modelMsgs[m.file];
+      if (msg) { const d = document.createElement("div"); d.className = "msg" + (msg.bad ? " bad" : ""); d.textContent = msg.text; row.appendChild(d); }
+      box.appendChild(row);
+    }
+    updateLanguageHint();
+  }
+
+  function updateLanguageHint() {
+    const sel = state.whisper_models.find((m) => m.path === form["paths.model"]);
+    $("#lang-hint").hidden = !(sel && sel.english_only && form["whisper.language"] !== "en");
+  }
+
   // Controls that only matter when another setting is on.
   function dependents() {
+    if (state) updateLanguageHint();
     const lt = $("[data-key='ui.live_text']");
     if (!state.locked.includes("ui.live_text")) lt.disabled = !form["ui.overlay"];
     const lg = $("[data-key='log_text']");
@@ -445,6 +548,7 @@
       else if (type === "number") form[key] = el.value === "" ? null : Number(el.value);
       else if (type === "number-optional") form[key] = el.value === "" ? "" : Number(el.value);
       else if (type === "select") form[key] = el.value;
+      else if (type === "model-list") { const r = $("input:checked", el); if (r) form[key] = r.value; }
     });
   }
 
@@ -476,7 +580,7 @@
     Object.assign(form, hk);
   }
   $$("[data-key]").forEach((el) => {
-    if (el.dataset.type === "hotkey") return;
+    if (el.dataset.type === "hotkey" || el.dataset.type === "model-list") return;
     el.addEventListener("input", changed);
     el.addEventListener("change", changed);
   });
@@ -492,7 +596,7 @@
   }
   $("#save-btn").addEventListener("click", save);
   $("#revert-btn").addEventListener("click", () => {
-    form = structuredClone(state.values); render(); changed();
+    form = structuredClone(state.values); render(); changed(); renderModels();
   });
   $("#overrides-btn").addEventListener("click", () => post({ action: "open_overrides" }));
 
@@ -542,6 +646,15 @@
       $("#test-note").textContent = msg.note || "";
       $("#test-btn").disabled = false;
     },
+    whisper_progress(msg) {
+      dlProgress = msg;
+      renderModels();
+    },
+    whisper_done(msg) {
+      dlProgress = null;
+      modelMsgs[msg.file] = { text: msg.message, bad: !msg.ok };
+      renderModels();
+    },
     pull(msg) {
       const box = $("#pull-progress"), bar = $("progress", box), label = $("span", box);
       box.hidden = false;
@@ -554,7 +667,7 @@
       }
     },
   };
-  window.vd = { receive: (msg) => handlers[msg.type] && handlers[msg.type](msg) };
+  window.vd = { receive: (msg) => handlers[msg.type] && handlers[msg.type](msg), showTab };
 
   post({ action: "load" });
 })();

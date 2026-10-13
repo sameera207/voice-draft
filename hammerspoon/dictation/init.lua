@@ -393,7 +393,7 @@ end
 
 local rebind_hotkeys, suspend_hotkeys -- defined with the hotkey code below
 
-function M.open_settings_window()
+function M.open_settings_window(tab)
   settings_window.open({
     cfg = function() return cfg end,
     locked = function() return locked end,
@@ -407,7 +407,8 @@ function M.open_settings_window()
     suspend_hotkeys = function(active) suspend_hotkeys(active) end,
     open_overrides = M.open_overrides,
     html_path = ROOT .. "/hammerspoon/dictation/settings/index.html",
-  })
+    root = ROOT,
+  }, tab)
 end
 
 local function menu()
@@ -455,6 +456,8 @@ local function menu()
     wm[#wm + 1] = item(name, "paths.model", path, path == cfg.paths.model)
   end
   if #wm == 0 then wm[1] = { title = "No models in " .. cfg.paths.model:match("^(.*)/"), disabled = true } end
+  wm[#wm + 1] = { title = "-" }
+  wm[#wm + 1] = { title = "More models…", fn = function() M.open_settings_window("transcription") end }
   items[#items + 1] = submenu("Whisper model", "paths.model", wm)
 
   -- Language

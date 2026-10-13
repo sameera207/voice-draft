@@ -1,0 +1,11 @@
+# Whisper models offered in Settings and by 'voice-draft models'.
+# Checksums are pinned; downloads that don't match are discarded.
+# file	bytes	sha256	label	note
+ggml-large-v3-turbo.bin	1624555275	1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69	large-v3-turbo	Best accuracy, all languages. The default.
+ggml-large-v3-turbo-q8_0.bin	874188075	317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1	large-v3-turbo (q8)	Nearly the same accuracy at half the size.
+ggml-large-v3-turbo-q5_0.bin	574041195	394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2	large-v3-turbo (q5)	Slightly less accurate, a third of the size.
+ggml-medium.en.bin	1533774781	cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356	medium.en	Good accuracy, English only. Slower than turbo.
+ggml-small.en.bin	487614201	c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d	small.en	Faster, English only. Fine for short dictations.
+ggml-small.bin	487601967	1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b	small	Faster, all languages.
+ggml-base.en.bin	147964211	a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002	base.en	Very fast, English only. Noticeably less accurate.
+ggml-tiny.en.bin	77704715	921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f	tiny.en	Fastest, English only. Mostly for testing.
